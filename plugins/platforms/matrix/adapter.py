@@ -680,9 +680,10 @@ def ensure_matrix_deps() -> bool:
 
 
 from plugins.platforms.matrix.invites import MatrixInvitesMixin
+from plugins.platforms.matrix.delivery import MatrixDeliveryMixin
 
 
-class MatrixAdapter(MatrixInboundEventMixin, MatrixMediaMixin, MatrixInvitesMixin, MatrixIntakeMixin, MatrixRedactionMixin, MatrixFollowupMixin, MatrixRichContentMixin, MatrixContextMixin, BasePlatformAdapter):
+class MatrixAdapter(MatrixDeliveryMixin, MatrixInboundEventMixin, MatrixMediaMixin, MatrixInvitesMixin, MatrixIntakeMixin, MatrixRedactionMixin, MatrixFollowupMixin, MatrixRichContentMixin, MatrixContextMixin, BasePlatformAdapter):
     """Gateway adapter for Matrix (any homeserver)."""
 
     supports_code_blocks = True  # Matrix renders fenced code blocks (HTML/markdown)
@@ -1254,6 +1255,7 @@ class MatrixAdapter(MatrixInboundEventMixin, MatrixMediaMixin, MatrixInvitesMixi
         metadata: Optional[dict[str, Any]] = None) -> SendResult:
         if not content:
             return SendResult(success=True)
+        chat_id = await self._resolve_send_target(chat_id)
         last_event_id = None
         event_ids: list[str] = []
         for chunk in self.truncate_message(
@@ -1673,6 +1675,7 @@ class MatrixAdapter(MatrixInboundEventMixin, MatrixMediaMixin, MatrixInvitesMixi
         is_voice: bool = False, voice_metadata: Optional[dict[str, Any]] = None) -> SendResult:
         if len(data) > self._max_media_bytes:
             return self._media_too_large(len(data))
+        room_id = await self._resolve_send_target(room_id)
         upload_data = data
         encrypted_file = None
         if await self._room_needs_encrypted_upload(room_id):
