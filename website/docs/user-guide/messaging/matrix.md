@@ -114,6 +114,8 @@ matrix:
     - "@alice:matrix.org"
   allowed_rooms:                  # Matrix rooms allowed to trigger agent turns
     - "!abc123:matrix.org"
+  channel_prompts: {}             # Optional prompts keyed by internal room ID
+  channel_skill_bindings: []      # Optional skills keyed by internal room ID
   free_response_rooms:            # Rooms exempt from mention requirement
     - "!abc123:matrix.org"
   ignore_user_patterns:           # Bridge/appservice ghost users to ignore
@@ -989,6 +991,51 @@ client crashes depends on the homeserver supporting delayed events (MSC4140).
 Full setup, commands, limitations and the `matrix.rtc` tuning knobs: [Voice Mode][voice-mode].
 
 [voice-mode]: ../features/voice-mode.md
+
+## Per-Room Prompts
+
+Use `matrix.channel_prompts` to give individual Matrix rooms persistent
+instructions. Keys must be full internal room IDs—not room names, aliases,
+user IDs, or Matrix thread event IDs. Matrix threads use the entry for their
+containing room.
+
+```yaml
+matrix:
+  channel_prompts:
+    "!abc123:matrix.org": |
+      You are a research assistant. Focus on academic sources,
+      citations, and concise synthesis.
+    "!def456:matrix.org": |
+      Code review mode. Be precise about edge cases and
+      performance implications.
+```
+
+On every future turn in a matching room, Hermes injects the configured prompt
+ephemerally. Changes take effect without a new session or history rewrite.
+Unmatched rooms and blank or whitespace-only entries apply no prompt.
+
+## Per-Room Skill Bindings
+
+Use `matrix.channel_skill_bindings` to auto-load one or more installed skills
+when a new session starts in a specific room:
+
+```yaml
+matrix:
+  channel_skill_bindings:
+    - id: "!abc123:matrix.org"
+      skills:
+        - arxiv
+        - writing-plans
+    - id: "!def456:matrix.org"
+      skill: code-review
+```
+
+Binding IDs are full internal room IDs—not names, aliases, user IDs, or Matrix
+thread event IDs. Matrix threads use their containing room's binding. Skills
+load only at session start, so after changing a binding, run `/new` or wait for
+the session to reset. Unmatched rooms and empty bindings load no skill. You can
+combine a skill binding with `channel_prompts` for per-turn room instructions.
+
 
 ## Troubleshooting
 

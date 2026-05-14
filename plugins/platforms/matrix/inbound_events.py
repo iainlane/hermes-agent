@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import asyncio
 from typing import TYPE_CHECKING, Any, Optional
 
-from gateway.platforms.base import BasePlatformAdapter
+from gateway.platforms.base import BasePlatformAdapter, resolve_channel_prompt, resolve_channel_skills
 from gateway.platforms.event import MessageEvent, MessageType, QuotedMediaDependency
 from plugins.platforms.matrix.adapter_feedback import ReadReceiptMode
 from plugins.platforms.matrix.effective_event import event_content, event_unsigned
@@ -104,7 +104,10 @@ class MatrixInboundEventMixin(BasePlatformAdapter):
             reply_to_author_name=reply.author_name,
             reply_to_is_own_message=reply.is_own_message,
             reply_to_author_authorized=reply.author_authorized,
-            user_id=sender, user_name=display_name, timestamp=timestamp, **extra)
+            user_id=sender, user_name=display_name, timestamp=timestamp,
+            auto_skill=resolve_channel_skills(self.config.extra, room_id),
+            channel_prompt=resolve_channel_prompt(self.config.extra, room_id),
+            **extra)
         if reply.media_path and reply.event_id and reply.media_content_id:
             event._quoted_media_dependencies = (
                 QuotedMediaDependency(
