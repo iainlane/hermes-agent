@@ -14,6 +14,7 @@ _TOOLSET_PLATFORM_RESTRICTIONS = {
     "matrix_image_packs": {"matrix"},
     "matrix_unread": {"matrix"},
     "matrix_threads": {"matrix"},
+    "reaction_menu": {"matrix"},
 }
 
 
