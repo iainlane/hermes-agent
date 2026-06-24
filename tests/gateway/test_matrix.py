@@ -378,6 +378,26 @@ def _make_adapter():
     return adapter
 
 
+def _make_identity(room_id, **overrides):
+    """Build a MatrixRoomIdentity with sensible defaults for tests."""
+    from plugins.platforms.matrix.adapter import MatrixRoomIdentity
+    fields = dict(
+        room_id=room_id,
+        room_name=None,
+        room_topic=None,
+        canonical_alias=None,
+        server_name="example.org",
+        joined_member_count=2,
+        is_direct_account_data=False,
+        display_name=room_id,
+        has_explicit_name=False,
+        chat_type="room",
+        conflict=False,
+    )
+    fields.update(overrides)
+    return MatrixRoomIdentity(**fields)
+
+
 # ---------------------------------------------------------------------------
 # Typing indicator
 # ---------------------------------------------------------------------------
@@ -625,6 +645,467 @@ class TestMatrixDmDetection:
             "!room_a:ex.org": True,
             "!room_b:ex.org": False,
         }
+
+
+# ---------------------------------------------------------------------------
+# Computed room name (unnamed rooms)
+# ---------------------------------------------------------------------------
+
+class TestMatrixComputedRoomName:
+    """An unnamed Matrix room (no m.room.name, no alias) should still resolve to
+    a human-readable name derived from its members, the way Matrix clients do,
+    instead of falling back to the bare room ID."""
+
+    def setup_method(self):
+        self.adapter = _make_adapter()
+        self.adapter._user_id = "@bot:example.org"
+        self.adapter._joined_rooms = {"!room:example.org"}
+        self.adapter._dm_rooms = {}
+
+    @staticmethod
+    def _member(displayname):
+        return types.SimpleNamespace(displayname=displayname)
+
+    def _client_without_name(self, *, profiles):
+        """A client whose room has no name/topic/alias state, only members."""
+        client = MagicMock()
+
+        async def get_state_event(room_id, event_type):
+            raise Exception(f"no {event_type}")
+
+        client.get_state_event = AsyncMock(side_effect=get_state_event)
+        client.state_store = MagicMock()
+        client.state_store.get_member_profiles = AsyncMock(return_value=profiles)
+        client.state_store.get_members = AsyncMock(return_value=list(profiles.keys()))
+        return client
+
+    @pytest.mark.asyncio
+    async def test_unnamed_room_named_after_other_member(self):
+        self.adapter._client = self._client_without_name(
+            profiles={
+                "@bot:example.org": self._member("Hermes"),
+                "@iain:example.org": self._member("iain"),
+            }
+        )
+
+        identity = await self.adapter._resolve_room_identity("!room:example.org")
+
+        assert identity.display_name == "iain"
+        assert identity.has_explicit_name is False
+        assert identity.chat_type == "room"
+
+    @pytest.mark.asyncio
+    async def test_member_without_displayname_uses_localpart(self):
+        self.adapter._client = self._client_without_name(
+            profiles={
+                "@bot:example.org": self._member("Hermes"),
+                "@carol:example.org": self._member(None),
+            }
+        )
+
+        identity = await self.adapter._resolve_room_identity("!room:example.org")
+
+        assert identity.display_name == "carol"
+
+    @pytest.mark.asyncio
+    async def test_multi_member_room_lists_names(self):
+        self.adapter._client = self._client_without_name(
+            profiles={
+                "@bot:example.org": self._member("Hermes"),
+                "@amy:example.org": self._member("Amy"),
+                "@bea:example.org": self._member("Bea"),
+                "@cid:example.org": self._member("Cid"),
+                "@dan:example.org": self._member("Dan"),
+            }
+        )
+
+        identity = await self.adapter._resolve_room_identity("!room:example.org")
+
+        assert identity.display_name == "Amy, Bea, Cid and 1 other"
+
+    @pytest.mark.asyncio
+    async def test_room_with_only_self_falls_back_to_room_id(self):
+        self.adapter._client = self._client_without_name(
+            profiles={"@bot:example.org": self._member("Hermes")}
+        )
+
+        identity = await self.adapter._resolve_room_identity("!room:example.org")
+
+        assert identity.display_name == "!room:example.org"
+
+    @pytest.mark.asyncio
+    async def test_explicit_name_wins_over_members(self):
+        client = MagicMock()
+
+        async def get_state_event(room_id, event_type):
+            if event_type == "m.room.name":
+                return {"content": {"name": "Project Room"}}
+            raise Exception(f"no {event_type}")
+
+        client.get_state_event = AsyncMock(side_effect=get_state_event)
+        client.state_store = MagicMock()
+        client.state_store.get_member_profiles = AsyncMock(
+            return_value={"@iain:example.org": self._member("iain")}
+        )
+        client.state_store.get_members = AsyncMock(
+            return_value=["@bot:example.org", "@iain:example.org"]
+        )
+        self.adapter._client = client
+
+        identity = await self.adapter._resolve_room_identity("!room:example.org")
+
+        assert identity.display_name == "Project Room"
+        assert identity.has_explicit_name is True
+
+    @pytest.mark.parametrize(
+        "names,expected",
+        [
+            ([], ""),
+            (["Alice"], "Alice"),
+            (["Alice", "Bob"], "Alice and Bob"),
+            (["Alice", "Bob", "Carol"], "Alice, Bob and Carol"),
+            (["Alice", "Bob", "Carol", "Dave"], "Alice, Bob, Carol and 1 other"),
+            (["A", "B", "C", "D", "E"], "A, B, C and 2 others"),
+        ],
+    )
+    def test_format_member_names(self, names, expected):
+        from plugins.platforms.matrix.adapter import MatrixAdapter
+
+        assert MatrixAdapter._format_member_names(names) == expected
+
+
+# ---------------------------------------------------------------------------
+# Room state changes (topic/name/membership/...)
+# ---------------------------------------------------------------------------
+
+class TestMatrixRoomStateChanges:
+    """Live room-state changes invalidate the cached identity and, for the
+    changes worth surfacing, leave a one-off note delivered to the agent on the
+    next message (hybrid). Membership and alias changes are passive: cache
+    invalidation only, no note."""
+
+    ROOM = "!room:example.org"
+
+    def setup_method(self):
+        self.adapter = _make_adapter()
+        self.adapter._user_id = "@bot:example.org"
+        self.adapter._startup_ts = 0.0
+
+    @staticmethod
+    def _event(etype, *, room_id="!room:example.org", sender="@iain:example.org",
+               content=None, timestamp=0):
+        return types.SimpleNamespace(
+            room_id=room_id, sender=sender, type=etype,
+            content=content or {}, timestamp=timestamp,
+        )
+
+    def _prime_cache(self):
+        self.adapter._room_identities[self.ROOM] = object()
+        self.adapter._room_identity_cached_at[self.ROOM] = 123.0
+
+    @pytest.mark.asyncio
+    async def test_topic_change_invalidates_cache_and_stashes_note(self):
+        self._prime_cache()
+        await self.adapter._on_room_state(
+            self._event("m.room.topic", content={"topic": "Incident: payments down"})
+        )
+        assert self.ROOM not in self.adapter._room_identities
+        assert self.ROOM not in self.adapter._room_identity_cached_at
+        assert (
+            self.adapter._take_pending_room_notes(self.ROOM)
+            == '[The room topic changed to: "Incident: payments down"]'
+        )
+
+    @pytest.mark.asyncio
+    async def test_cleared_topic_note(self):
+        await self.adapter._on_room_state(self._event("m.room.topic", content={"topic": ""}))
+        assert self.adapter._take_pending_room_notes(self.ROOM) == "[The room topic was cleared.]"
+
+    @pytest.mark.asyncio
+    async def test_name_change_note(self):
+        await self.adapter._on_room_state(self._event("m.room.name", content={"name": "Ops"}))
+        assert self.adapter._take_pending_room_notes(self.ROOM) == '[The room was renamed to: "Ops"]'
+
+    @pytest.mark.asyncio
+    async def test_membership_change_invalidates_but_no_note(self):
+        self._prime_cache()
+        await self.adapter._on_room_state(
+            self._event("m.room.member", content={"membership": "join"})
+        )
+        assert self.ROOM not in self.adapter._room_identities
+        assert self.adapter._take_pending_room_notes(self.ROOM) is None
+
+    @pytest.mark.asyncio
+    async def test_canonical_alias_change_invalidates_but_no_note(self):
+        self._prime_cache()
+        await self.adapter._on_room_state(
+            self._event("m.room.canonical_alias", content={"alias": "#ops:example.org"})
+        )
+        assert self.ROOM not in self.adapter._room_identities
+        assert self.adapter._take_pending_room_notes(self.ROOM) is None
+
+    @pytest.mark.asyncio
+    async def test_own_change_invalidates_but_no_note(self):
+        self._prime_cache()
+        await self.adapter._on_room_state(
+            self._event("m.room.topic", sender="@bot:example.org", content={"topic": "x"})
+        )
+        assert self.ROOM not in self.adapter._room_identities
+        assert self.adapter._take_pending_room_notes(self.ROOM) is None
+
+    @pytest.mark.asyncio
+    async def test_initial_sync_state_invalidates_but_no_note(self):
+        self.adapter._startup_ts = time.time()
+        self._prime_cache()
+        await self.adapter._on_room_state(
+            self._event("m.room.topic", content={"topic": "old"}, timestamp=1000)
+        )
+        assert self.ROOM not in self.adapter._room_identities
+        assert self.adapter._take_pending_room_notes(self.ROOM) is None
+
+    @pytest.mark.asyncio
+    async def test_repeated_topic_changes_coalesce_to_latest(self):
+        await self.adapter._on_room_state(self._event("m.room.topic", content={"topic": "first"}))
+        await self.adapter._on_room_state(self._event("m.room.topic", content={"topic": "second"}))
+        assert (
+            self.adapter._take_pending_room_notes(self.ROOM)
+            == '[The room topic changed to: "second"]'
+        )
+
+    @pytest.mark.asyncio
+    async def test_distinct_changes_both_surfaced(self):
+        await self.adapter._on_room_state(self._event("m.room.topic", content={"topic": "T"}))
+        await self.adapter._on_room_state(self._event("m.room.name", content={"name": "N"}))
+        note = self.adapter._take_pending_room_notes(self.ROOM)
+        assert '[The room topic changed to: "T"]' in note
+        assert '[The room was renamed to: "N"]' in note
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "etype,content,expected",
+        [
+            ("m.room.tombstone", {"body": "upgraded"},
+             "[This room has been replaced; the conversation has moved to a successor room.]"),
+            ("m.room.encryption", {"algorithm": "m.megolm.v1.aes-sha2"},
+             "[This room is now end-to-end encrypted.]"),
+            ("m.room.join_rules", {"join_rule": "public"},
+             "[The room join rule changed to: public.]"),
+            ("m.room.history_visibility", {"history_visibility": "world_readable"},
+             "[The room history visibility changed to: world_readable.]"),
+        ],
+    )
+    async def test_posture_change_notes(self, etype, content, expected):
+        await self.adapter._on_room_state(self._event(etype, content=content))
+        assert self.adapter._take_pending_room_notes(self.ROOM) == expected
+
+    @pytest.mark.asyncio
+    async def test_direct_account_data_refreshes_dm_cache(self):
+        self.adapter._refresh_dm_cache = AsyncMock()
+        await self.adapter._on_direct_account_data(self._event("m.direct"))
+        self.adapter._refresh_dm_cache.assert_awaited_once()
+
+    async def _dispatch_text(self, body, *, is_dm=True, require_mention=False):
+        captured = None
+        self.adapter._is_dm_room = AsyncMock(return_value=is_dm)
+        self.adapter._get_display_name = AsyncMock(return_value="iain")
+        self.adapter._background_read_receipt = MagicMock()
+        self.adapter._text_batch_delay_seconds = 0
+        self.adapter._require_mention = require_mention
+        self.adapter._free_rooms = set()
+
+        async def capture(msg_event):
+            nonlocal captured
+            captured = msg_event
+
+        self.adapter.handle_message = capture
+        await self.adapter._handle_text_message(
+            room_id=self.ROOM,
+            sender="@iain:example.org",
+            event_id="$msg",
+            event_ts=0.0,
+            source_content={"msgtype": "m.text", "body": body},
+            relates_to={},
+        )
+        return captured
+
+    @pytest.mark.asyncio
+    async def test_pending_notes_flushed_into_channel_context(self):
+        await self.adapter._on_room_state(self._event("m.room.topic", content={"topic": "Deploys"}))
+        captured = await self._dispatch_text("hello")
+        assert captured is not None
+        assert captured.channel_context == '[The room topic changed to: "Deploys"]'
+        # consumed — not delivered twice
+        assert self.adapter._take_pending_room_notes(self.ROOM) is None
+
+    @pytest.mark.asyncio
+    async def test_dropped_message_keeps_notes_pending(self):
+        await self.adapter._on_room_state(self._event("m.room.topic", content={"topic": "Deploys"}))
+        captured = await self._dispatch_text("no mention", is_dm=False, require_mention=True)
+        assert captured is None
+        assert (
+            self.adapter._take_pending_room_notes(self.ROOM)
+            == '[The room topic changed to: "Deploys"]'
+        )
+
+    @pytest.mark.asyncio
+    async def test_batched_chunks_merge_channel_context(self):
+        """A note captured on a later batched chunk must survive the merge into
+        the queued event rather than being discarded."""
+        from gateway.platforms.base import MessageEvent
+
+        source = self.adapter.build_source(
+            chat_id=self.ROOM, chat_type="dm", user_id="@iain:example.org"
+        )
+        first = MessageEvent(text="a", source=source)
+        second = MessageEvent(
+            text="b", source=source,
+            channel_context='[The room topic changed to: "X"]',
+        )
+
+        self.adapter._enqueue_text_event(first)
+        self.adapter._enqueue_text_event(second)
+        try:
+            key = self.adapter._text_batch_key(first)
+            queued = self.adapter._pending_text_batches[key]
+            assert queued.channel_context == '[The room topic changed to: "X"]'
+        finally:
+            for task in self.adapter._pending_text_batch_tasks.values():
+                task.cancel()
+
+
+# ---------------------------------------------------------------------------
+# DM detection: recording m.direct from invites
+# ---------------------------------------------------------------------------
+
+class TestMatrixDirectInvite:
+    """Like every Matrix client, the bot records direct chats in its own
+    m.direct account data on invite — the only place the is_direct signal
+    appears — so DM-vs-room classification is accurate from the first turn."""
+
+    ROOM = "!dm:example.org"
+    INVITER = "@iain:example.org"
+
+    def setup_method(self):
+        self.adapter = _make_adapter()
+        self.adapter._user_id = "@bot:example.org"
+        self.adapter._join_room_by_id = AsyncMock(return_value=True)
+        self.adapter._refresh_dm_cache = AsyncMock()
+
+    def _client(self, *, account_data=None):
+        client = MagicMock()
+        client.get_account_data = AsyncMock(return_value=account_data or {})
+        client.set_account_data = AsyncMock()
+        self.adapter._client = client
+        return client
+
+    @staticmethod
+    def _invite(*, is_direct, room_id="!dm:example.org", sender="@iain:example.org"):
+        return types.SimpleNamespace(
+            room_id=room_id,
+            sender=sender,
+            content={"is_direct": is_direct, "membership": "invite"},
+        )
+
+    @pytest.mark.asyncio
+    async def test_is_direct_invite_records_m_direct(self):
+        client = self._client(account_data={})
+        await self.adapter._on_invite(self._invite(is_direct=True))
+
+        self.adapter._join_room_by_id.assert_awaited_once_with(self.ROOM)
+        client.set_account_data.assert_awaited_once_with(
+            "m.direct", {self.INVITER: [self.ROOM]}
+        )
+        self.adapter._refresh_dm_cache.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_already_recorded_skips_write(self):
+        client = self._client(account_data={self.INVITER: [self.ROOM]})
+        await self.adapter._on_invite(self._invite(is_direct=True))
+
+        client.set_account_data.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_already_recorded_non_last_position_skips_write(self):
+        client = self._client(
+            account_data={self.INVITER: [self.ROOM, "!other:example.org"]}
+        )
+        await self.adapter._on_invite(self._invite(is_direct=True))
+
+        client.set_account_data.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_moves_room_from_stale_user(self):
+        client = self._client(account_data={"@old:example.org": [self.ROOM]})
+        await self.adapter._on_invite(self._invite(is_direct=True))
+
+        client.set_account_data.assert_awaited_once_with(
+            "m.direct", {"@old:example.org": [], self.INVITER: [self.ROOM]}
+        )
+
+    @pytest.mark.asyncio
+    async def test_duplicate_in_foreign_bucket_is_deduplicated(self):
+        client = self._client(
+            account_data={self.INVITER: [self.ROOM], "@old:example.org": [self.ROOM]}
+        )
+        await self.adapter._on_invite(self._invite(is_direct=True))
+
+        client.set_account_data.assert_awaited_once_with(
+            "m.direct", {self.INVITER: [self.ROOM], "@old:example.org": []}
+        )
+
+    @pytest.mark.asyncio
+    async def test_non_direct_two_member_room_uses_fallback(self):
+        client = self._client(account_data={})
+        self.adapter._resolve_room_identity = AsyncMock(
+            return_value=_make_identity(
+                self.ROOM, has_explicit_name=False, canonical_alias=None,
+                joined_member_count=2,
+            )
+        )
+        self.adapter._other_member_id = AsyncMock(return_value=self.INVITER)
+
+        await self.adapter._on_invite(self._invite(is_direct=False))
+
+        client.set_account_data.assert_awaited_once_with(
+            "m.direct", {self.INVITER: [self.ROOM]}
+        )
+
+    @pytest.mark.asyncio
+    async def test_non_direct_named_room_not_recorded(self):
+        client = self._client(account_data={})
+        self.adapter._resolve_room_identity = AsyncMock(
+            return_value=_make_identity(
+                self.ROOM, has_explicit_name=True, canonical_alias=None,
+                joined_member_count=2,
+            )
+        )
+
+        await self.adapter._on_invite(self._invite(is_direct=False))
+
+        client.set_account_data.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_direct_multi_member_room_not_recorded(self):
+        client = self._client(account_data={})
+        self.adapter._resolve_room_identity = AsyncMock(
+            return_value=_make_identity(
+                self.ROOM, has_explicit_name=False, canonical_alias=None,
+                joined_member_count=5,
+            )
+        )
+
+        await self.adapter._on_invite(self._invite(is_direct=False))
+
+        client.set_account_data.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_join_failure_skips_marking(self):
+        client = self._client(account_data={})
+        self.adapter._join_room_by_id = AsyncMock(return_value=False)
+
+        await self.adapter._on_invite(self._invite(is_direct=True))
+
+        client.set_account_data.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
