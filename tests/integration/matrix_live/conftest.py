@@ -255,6 +255,7 @@ def linux_nio_observer(
 
 @pytest.fixture
 def gateway(
+    request: pytest.FixtureRequest,
     tmp_path: Path,
     gateway_image: str,
     synapse: tuple[DockerContainer, str, Network],
@@ -299,6 +300,8 @@ def gateway(
                 f"MATRIX_HOME_ROOM={room_id}\n"
                 "MATRIX_E2EE_MODE=optional\nMATRIX_REACTIONS=false\nMATRIX_AUTO_THREAD=false\n"
             )
+            if hasattr(request, "param"):
+                stream.write(f"MATRIX_MAX_MEDIA_BYTES={request.param}\n")
         if context_pause:
             plugin = home / "plugins" / "matrix-live-context"
             plugin.mkdir(parents=True)
