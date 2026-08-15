@@ -7,6 +7,7 @@ import pytest
 
 from tools.tts_tool import (
     _XAI_INLINE_SPEECH_TAGS,
+    _XAI_SPEECH_TAG_RE,
     _XAI_WRAPPING_SPEECH_TAGS,
     _apply_xai_auto_speech_tags,
     _generate_xai_tts,
@@ -25,6 +26,40 @@ def test_apply_xai_auto_speech_tags_preserves_explicit_tags():
     text = "Bonjour. [pause] <whisper>Déjà balisé.</whisper>"
 
     assert _apply_xai_auto_speech_tags(text) == text
+
+
+@pytest.mark.parametrize("tag", ["whisper", "soft", "build-intensity"])
+def test_xai_speech_tag_re_matches_square_wrapping_forms(tag):
+    """The regex must recognise the BBCode-style ``[tag]...[/tag]`` form the
+    auxiliary rewriter's own prompt instructs it to emit.
+    """
+    opening = _XAI_SPEECH_TAG_RE.search(f"[{tag}]hello there[/{tag}]")
+    closing = _XAI_SPEECH_TAG_RE.search(f"already open[/{tag}]")
+
+    assert opening is not None
+    assert opening.group(0) == f"[{tag}]"
+    assert closing is not None
+    assert closing.group(0) == f"[/{tag}]"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Bonjour. [whisper]Déjà balisé.[/whisper]",
+        "[soft]This is a gentle multi-word aside about the plan.[/soft] Then back to normal.",
+        "[pause] [emphasis]Really important[/emphasis] words follow here.",
+    ],
+    ids=["square-wrap", "multi-word-content", "mixed-inline-and-wrapping"],
+)
+def test_apply_xai_auto_speech_tags_preserves_square_wrapping_tags(text):
+    """Square-wrapped ``[tag]...[/tag]`` text is already tagged and must not
+    be re-sent through the auxiliary rewrite.
+    """
+    with patch("agent.auxiliary_client.call_llm") as mock_call:
+        result = _apply_xai_auto_speech_tags(text)
+
+    mock_call.assert_not_called()
+    assert result == text
 
 
 def test_apply_xai_auto_speech_tags_multi_paragraph_emits_single_pause():

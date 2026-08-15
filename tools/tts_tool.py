@@ -2010,7 +2010,9 @@ _XAI_WRAPPING_SPEECH_TAGS = (
     "emphasis",
 )
 _XAI_SPEECH_TAG_RE = re.compile(
-    r"(\[(?:" + "|".join(_XAI_INLINE_SPEECH_TAGS) + r")\]|</?(?:" + "|".join(_XAI_WRAPPING_SPEECH_TAGS) + r")>)",
+    r"(\[(?:" + "|".join(_XAI_INLINE_SPEECH_TAGS) + r")\]"
+    r"|\[/?(?:" + "|".join(_XAI_WRAPPING_SPEECH_TAGS) + r")\]"
+    r"|</?(?:" + "|".join(_XAI_WRAPPING_SPEECH_TAGS) + r")>)",
     flags=re.IGNORECASE,
 )
 _XAI_FIRST_SENTENCE_RE = re.compile(r"^(.{12,120}?[.!?…])\s+(?=\S)", flags=re.DOTALL)
