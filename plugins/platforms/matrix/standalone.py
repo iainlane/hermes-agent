@@ -163,15 +163,14 @@ def _text_payload(message: str, thread_id: str | None) -> dict[str, Any]:
 
         tokenized, tex_store = _latex_to_tokens(message)
         html = markdown.markdown(tokenized, extensions=["fenced_code", "tables"])
-        formatted = {
-            "format": "org.matrix.custom.html",
-            "formatted_body": _tokens_to_mx_maths(
-                _sanitize_matrix_html(re.sub(r"<h[1-6]>(.*?)</h[1-6]>", r"<strong>\1</strong>", html)),
-                tex_store,
-            ),
-        }
-        if len(json.dumps({**payload, **formatted})) <= _MAX_CONTENT_BYTES:
-            payload.update(formatted)
+        safe_html = _sanitize_matrix_html(re.sub(r"<h[1-6]>(.*?)</h[1-6]>", r"<strong>\1</strong>", html))
+        if safe_html.strip():
+            formatted = {
+                "format": "org.matrix.custom.html",
+                "formatted_body": _tokens_to_mx_maths(safe_html, tex_store),
+            }
+            if len(json.dumps({**payload, **formatted})) <= _MAX_CONTENT_BYTES:
+                payload.update(formatted)
     return payload
 
 

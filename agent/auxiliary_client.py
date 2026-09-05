@@ -7861,6 +7861,7 @@ def call_llm(
     extra_headers: Optional[dict[str, str]] = None, api_mode: str | None = None, stream: bool = False,
     stream_options: dict | None = None, route_info: Optional[dict[str, str]] = None,
     latency_info: Optional[dict[str, int]] = None,
+    allow_provider_fallback: bool = True,
 ) -> Any:
     """Run an auxiliary LLM request, applying the configured task limit."""
 
@@ -7886,6 +7887,7 @@ def call_llm(
         stream_options=stream_options,
         route_info=route_info,
         latency_info=latency_info,
+        allow_provider_fallback=allow_provider_fallback,
     )
 
 
@@ -7964,6 +7966,7 @@ async def async_call_llm(
     temperature: Optional[float] = None, max_tokens: int | None = None, tools: list | None = None,
     timeout: float | None = None, extra_body: dict | None = None, reasoning_config: Optional[dict] = None,
     route_info: Optional[dict[str, str]] = None,
+    allow_provider_fallback: bool = True,
 ) -> Any:
     """Run an asynchronous auxiliary LLM request under the configured limit."""
 
@@ -7984,4 +7987,5 @@ async def async_call_llm(
         extra_body=extra_body,
         reasoning_config=reasoning_config,
         route_info=route_info,
+        allow_provider_fallback=allow_provider_fallback,
     )
