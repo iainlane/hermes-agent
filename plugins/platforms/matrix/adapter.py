@@ -171,6 +171,8 @@ from plugins.platforms.matrix.room_context import MatrixRoomState, format_room_n
 from plugins.platforms.matrix.voice_mention import ParkedVoices, VoiceGate, is_voice_event
 
 from plugins.platforms.matrix.adapter_feedback import MatrixFeedbackPolicy, ReadReceiptMode
+from .rtc.join import MatrixRTCVoiceMixin
+from .rtc.outbound import MatrixRTCOutboundMixin
 
 logger = logging.getLogger(__name__)
 
@@ -718,7 +720,7 @@ from plugins.platforms.matrix.delivery import MatrixDeliveryMixin
 from plugins.platforms.matrix.feedback import MatrixFeedbackMixin
 
 
-class MatrixAdapter(MatrixEditFollowupsMixin, MatrixFeedbackMixin, MatrixDeliveryMixin, MatrixInboundEventMixin, MatrixMediaMixin, MatrixInvitesMixin, MatrixPendingReplayMixin, MatrixIntakeMixin, MatrixRedactionMixin, MatrixFollowupMixin, MatrixRichContentMixin, MatrixContextMixin, BasePlatformAdapter):
+class MatrixAdapter(MatrixRTCVoiceMixin, MatrixRTCOutboundMixin, MatrixEditFollowupsMixin, MatrixFeedbackMixin, MatrixDeliveryMixin, MatrixInboundEventMixin, MatrixMediaMixin, MatrixInvitesMixin, MatrixPendingReplayMixin, MatrixIntakeMixin, MatrixRedactionMixin, MatrixFollowupMixin, MatrixRichContentMixin, MatrixContextMixin, BasePlatformAdapter):
     """Gateway adapter for Matrix (any homeserver)."""
 
     supports_code_blocks = True  # Matrix renders fenced code blocks (HTML/markdown)
