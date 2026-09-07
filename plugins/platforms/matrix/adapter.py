@@ -2204,8 +2204,11 @@ class MatrixAdapter(MatrixFormattingMixin, MatrixReactionControlMixin, MatrixMed
             return text
         protected, placeholders = self._protect_outbound_mention_regions(text)
         linked = _OUTBOUND_MENTION_RE.sub(lambda m: f"[{m.group(1)}](https://matrix.to/#/{m.group(1)})", protected)
-        for idx, original in enumerate(placeholders):
-            linked = linked.replace(f"\x00MENTION_PROTECTED{idx}\x00", original)
+        # Later placeholders may contain earlier ones; unwind them outside-in.
+        for idx in reversed(range(len(placeholders))):
+            linked = linked.replace(
+                f"\x00MENTION_PROTECTED{idx}\x00", placeholders[idx]
+            )
         return linked
 
     def _protect_outbound_mention_regions(self, text: str) -> tuple[str, list[str]]:
