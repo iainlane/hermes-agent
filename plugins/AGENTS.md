@@ -123,3 +123,6 @@ too: no attribution tag ships by default.
 
 Matrix inbound event construction and server-time conversion are defined in
 `platforms/matrix/inbound_events.py`; callers use the adapter mixin.
+
+Matrix outbound HTML sanitisation and TeX helpers are defined in
+`platforms/matrix/rendering.py`; the adapter imports the functions it uses.

@@ -574,21 +574,6 @@ def _scoped_recovery_key() -> str:
     return _get_scoped_secret("MATRIX_RECOVERY_KEY", "").strip()
 
 
-# --- LaTeX math ($...$, $$...$$) -> Element data-mx-maths markup ---
-# Element (feature_latex_maths) typesets <div|span data-mx-maths="TEX"> at display time.
-# Our sanitizer allowlists tags/attrs, so data-mx-maths cannot pass through HTML
-# sanitization directly. Instead, math is swapped for opaque sentinel tokens before
-# Markdown conversion (protecting TeX from escaping) and expanded back to math
-# markup after sanitization. Tokens are plain printable text with no special
-# HTML/Markdown meaning, so both the Markdown converter and the sanitizer
-# pass them through verbatim.
-
-
-
-
-
-
-
 def _redact_url_for_log(url: str) -> str:
     """Strip query/fragment from URLs before logging signed media links."""
     try:
