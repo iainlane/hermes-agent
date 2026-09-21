@@ -10,7 +10,7 @@ Env vars (config.yaml ``matrix:`` keys alias several — env wins):
   MATRIX_REQUIRE_MENTION (default true), MATRIX_THREAD_REQUIRE_MENTION, MATRIX_FREE_RESPONSE_ROOMS,
   MATRIX_PROCESS_NOTICES, MATRIX_ALLOW_ROOM_MENTIONS, MATRIX_ALLOW_PUBLIC_ROOMS (all default false);
   MATRIX_AUTO_THREAD (default true), MATRIX_DM_AUTO_THREAD, MATRIX_DM_MENTION_THREADS,
-  MATRIX_SESSION_SCOPE auto|room|thread; MATRIX_MAX_MESSAGE_LENGTH (default 16000),
+  MATRIX_SESSION_SCOPE auto|room|thread; MATRIX_REPLY_TO_MODE off|first|all (default first); MATRIX_MAX_MESSAGE_LENGTH (default 16000),
   MATRIX_MAX_MEDIA_BYTES, MATRIX_ROOM_IDENTITY_TTL_SECONDS; MATRIX_APPROVAL_REQUIRE_SENDER (default
   true), MATRIX_APPROVAL_TIMEOUT_SECONDS (default 300).
 
@@ -1313,9 +1313,10 @@ class MatrixAdapter(MatrixApprovalMixin, MatrixReactionPromptMixin, MatrixRTCVoi
         single_event = metadata is not None and (
             "matrix_formatted_body" in metadata or bool(metadata.get("is_approval_prompt")))
         chunks = [formatted] if single_event else self.truncate_message(formatted, self.max_message_length)
-        for chunk in chunks:
+        for index, chunk in enumerate(chunks):
             msg_content = self._build_text_message_content(chunk)
-            self._apply_relation_metadata(chat_id, msg_content, reply_to=reply_to, metadata=metadata)
+            chunk_reply_to = reply_to if self._should_reply_anchor(reply_to, index) else None
+            self._apply_relation_metadata(chat_id, msg_content, reply_to=chunk_reply_to, metadata=metadata)
             if (metadata or {}).get("non_conversational"):
                 msg_content[NON_CONVERSATIONAL_KEY] = True
             if single_event:
@@ -2330,7 +2331,7 @@ class MatrixAdapter(MatrixApprovalMixin, MatrixReactionPromptMixin, MatrixRTCVoi
         meta = metadata or {}
         thread_id = str(meta.get("thread_id") or "")
         fallback_to = str(meta.get("matrix_thread_fallback_event_id") or "")
-        if reply_to:
+        if reply_to and self._reply_to_mode != "off":
             msg_content["m.relates_to"] = {"m.in_reply_to": {"event_id": reply_to}}
         if thread_id:
             relates_to = msg_content.get("m.relates_to", {})
