@@ -33,6 +33,22 @@ _ROOM_NAME_STATE_KEYS = {"m.room.name": "name", "m.room.topic": "topic", "m.room
 
 
 class MatrixContextMixin:
+    @staticmethod
+    def _build_source_permalink(
+        room_id: str, event_id: str | None, server_name: str | None = None
+    ) -> str | None:
+        """Canonical matrix.to permalink for a room/event pair.
+
+        ``event_id`` should be the thread root when the message lives in a thread (stable anchor
+        that opens the thread), else the triggering event. The ``via`` parameter carries the
+        server name, derived from the room ID when the caller has none. None when no event.
+        """
+        if not event_id:
+            return None
+        via = server_name or (room_id.rsplit(":", 1)[-1].strip() or None if ":" in room_id else None)
+        permalink = f"https://matrix.to/#/{room_id}/{event_id}"
+        return f"{permalink}?via={via}" if via else permalink
+
     _client: Any
     _user_id: str
     _event_context_cache: MatrixEventContextCache
