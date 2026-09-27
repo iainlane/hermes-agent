@@ -994,8 +994,8 @@ Full setup, commands, limitations and the `matrix.rtc` tuning knobs: [Voice Mode
 
 ## Per-Room Prompts
 
-Use `matrix.channel_prompts` to give individual Matrix rooms persistent
-instructions. Keys must be full internal room IDs—not room names, aliases,
+Use `matrix.channel_prompts` to give individual Matrix rooms instructions.
+Keys must be full internal room IDs, not room names, aliases,
 user IDs, or Matrix thread event IDs. Matrix threads use the entry for their
 containing room.
 
@@ -1010,9 +1010,12 @@ matrix:
       performance implications.
 ```
 
-On every future turn in a matching room, Hermes injects the configured prompt
-ephemerally. Changes take effect without a new session or history rewrite.
+On each turn in a matching room, Hermes injects the configured prompt
+ephemerally. The prompt is not written to session history.
 Unmatched rooms and blank or whitespace-only entries apply no prompt.
+
+The room topic appears separately in the session context as untrusted metadata.
+Hermes does not treat topic text as instructions.
 
 ## Per-Room Skill Bindings
 
@@ -1030,7 +1033,7 @@ matrix:
       skill: code-review
 ```
 
-Binding IDs are full internal room IDs—not names, aliases, user IDs, or Matrix
+Binding IDs are full internal room IDs, not names, aliases, user IDs, or Matrix
 thread event IDs. Matrix threads use their containing room's binding. Skills
 load only at session start, so after changing a binding, run `/new` or wait for
 the session to reset. Unmatched rooms and empty bindings load no skill. You can
