@@ -2331,13 +2331,14 @@ class MatrixAdapter(MatrixApprovalMixin, MatrixReactionPromptMixin, MatrixRTCVoi
         meta = metadata or {}
         thread_id = str(meta.get("thread_id") or "")
         fallback_to = str(meta.get("matrix_thread_fallback_event_id") or "")
-        if reply_to and self._reply_to_mode != "off":
-            msg_content["m.relates_to"] = {"m.in_reply_to": {"event_id": reply_to}}
+        rich_reply = reply_to if self._reply_to_mode != "off" else None
+        if rich_reply:
+            msg_content["m.relates_to"] = {"m.in_reply_to": {"event_id": rich_reply}}
         if thread_id:
             relates_to = msg_content.get("m.relates_to", {})
             relates_to["rel_type"] = "m.thread"
             relates_to["event_id"] = thread_id
-            if reply_to and not self._thread_fallbacks.is_continuation(room_id, thread_id, reply_to):
+            if rich_reply and not self._thread_fallbacks.is_continuation(room_id, thread_id, rich_reply):
                 relates_to["is_falling_back"] = False
             else:
                 latest = self._thread_fallbacks.latest(room_id, thread_id)
