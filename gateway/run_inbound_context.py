@@ -32,16 +32,23 @@ def discord_triggering_note(message_id: Any) -> str:
     )
 
 
-def strip_discord_triggering_note(event: Any, message_text: Any) -> Any:
-    """Authored text for the durable user row: peel off exactly the note
-    ``_prepend_inbound_reply_context`` added for THIS event, if present. The note is a
-    model instruction, not something the user wrote — persisted as ``content`` it renders
-    verbatim in every transcript surface and pollutes FTS/memory (#71304, #114719). It
-    keeps riding ``message_text`` (and the replay-only ``api_content`` sidecar)."""
-    message_id = getattr(event, "message_id", None)
-    if not message_id or not isinstance(message_text, str):
+def matrix_source_note(permalink: str) -> str:
+    return f"[Matrix source: {permalink}]"
+
+def strip_inbound_source_note(event: Any, message_text: Any) -> Any:
+    """Remove the transport note from the durable user row."""
+    if not getattr(event, "message_id", None) or not isinstance(message_text, str):
         return message_text
-    prefix = f"{discord_triggering_note(message_id)}\n\n"
+
+    source = getattr(event, "source", None)
+    if getattr(source, "platform", None) == Platform.DISCORD:
+        note = discord_triggering_note(event.message_id)
+    elif getattr(source, "platform", None) == Platform.MATRIX and source.source_permalink:
+        note = matrix_source_note(source.source_permalink)
+    else:
+        return message_text
+
+    prefix = f"{note}\n\n"
     return message_text[len(prefix):] if message_text.startswith(prefix) else message_text
 
 
@@ -254,7 +261,7 @@ class GatewayInboundContextMixin:
 
         # Discord: the triggering message id goes on the per-turn user message, never the cached
         # system prompt — it changes every turn and would bust the agent-cache signature. It is
-        # the OUTERMOST prefix so strip_discord_triggering_note can peel exactly it off the
+        # the OUTERMOST prefix so strip_inbound_source_note can peel exactly it off the
         # persisted transcript row without touching the reply pointer.
         if (
             source is not None
@@ -268,6 +275,11 @@ class GatewayInboundContextMixin:
         if getattr(event, "metadata", None) and event.metadata.get("edited_message"):
             target = event.metadata.get("edited_message_original_id") or "unknown"
             message_text = f"[Correction to earlier message {target}]\n\n{message_text}"
+        if source.platform == Platform.MATRIX and event.message_id and source.source_permalink:
+            from gateway.session import _should_redact_pii
+
+            if not _should_redact_pii(Platform.MATRIX, redact_pii):
+                message_text = f"{matrix_source_note(source.source_permalink)}\n\n{message_text}"
         return message_text
 
 

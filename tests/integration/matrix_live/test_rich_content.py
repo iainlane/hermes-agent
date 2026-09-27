@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 from nio import RoomRedactResponse
+from plugins.platforms.matrix.context_mixin import MatrixContextMixin
 
 from tests.integration.matrix_live.conftest import (
     LinuxNioObserver,
@@ -199,7 +200,9 @@ def test_native_emotes_and_stickers_reach_model_and_withdraw_only_new_input(
         current = requests[4]["messages"][-1]["content"]
         assert isinstance(current, list)
         text = "".join(part.get("text", "") for part in current)
+        source_link = MatrixContextMixin._build_source_permalink(live_room.room_id, prepared["root"], "matrix.test")
         expected_prefix = (
+            f"[Matrix source: {source_link}]\n\n"
             '[Replying to alice: "[notice: Rich content thread root]"]\n\n'
             '[sticker: Retained queued sticker]\n\n[Image attached at: '
         )

@@ -171,7 +171,10 @@ async def test_input_during_opening_delivery_runs_after_the_fifo(
             ],
             receipts.call_args_list,
         ) == (
-            ["opening", "queued", "late"],
+            [
+                f"[Matrix source: https://matrix.to/#/!room:example.org/${text}]\n\n{text}"
+                for text in ["opening", "queued", "late"]
+            ],
             ["done-1", "done-2", "done-3"],
             [
                 call("!room:example.org", event_id)

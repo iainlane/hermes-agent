@@ -1473,7 +1473,7 @@ class GatewayTurnMixin(GatewayTurnExecutionMixin, GatewayTurnPreparationMixin, G
         model instruction, not authored text) — regardless of the toggle; only the in-context
         RENDER is gated behind gateway.message_timestamps.enabled (default OFF)."""
         from gateway.run import _load_gateway_config, _message_timestamps_enabled
-        from gateway.run_inbound_context import strip_discord_triggering_note
+        from gateway.run_inbound_context import strip_inbound_source_note
         persist_user_message = None
         persist_user_timestamp = None
         try:
@@ -1486,7 +1486,7 @@ class GatewayTurnMixin(GatewayTurnExecutionMixin, GatewayTurnPreparationMixin, G
             _evt_tz = _get_evt_tz()
             if message_text and isinstance(message_text, str):
                 _clean_message_text, _embedded_ts = _strip_msg_ts(message_text, tz=_evt_tz)
-                persist_user_message = strip_discord_triggering_note(event, _clean_message_text)
+                persist_user_message = strip_inbound_source_note(event, _clean_message_text)
                 _event_epoch = _coerce_msg_ts(getattr(event, "timestamp", None), tz=_evt_tz)
                 persist_user_timestamp = _event_epoch if _event_epoch is not None else _embedded_ts
                 if _message_timestamps_enabled(_load_gateway_config()):

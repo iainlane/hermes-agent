@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from urllib.parse import quote, urlencode
+
 from typing import TYPE_CHECKING, Any, Callable, Collection, Dict, Optional
 from contextlib import suppress
 import asyncio
@@ -46,8 +48,11 @@ class MatrixContextMixin:
         if not event_id:
             return None
         via = server_name or (room_id.rsplit(":", 1)[-1].strip() or None if ":" in room_id else None)
-        permalink = f"https://matrix.to/#/{room_id}/{event_id}"
-        return f"{permalink}?via={via}" if via else permalink
+        permalink = (
+            f"https://matrix.to/#/{quote(room_id, safe='!$:@')}/"
+            f"{quote(event_id, safe='!$:@')}"
+        )
+        return f"{permalink}?{urlencode({'via': via})}" if via else permalink
 
     _client: Any
     _user_id: str
