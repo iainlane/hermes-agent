@@ -66,18 +66,25 @@ async def _visible_event(adapter: Any, raw: dict[str, Any], room_id: str, chat_t
     }, None
 
 
+async def _read_access(adapter: Any, room_id: str, requester: str) -> tuple[Any, str | None, dict | None]:
+    if room_id not in adapter._joined_rooms or not await adapter._is_allowed_matrix_room_event(room_id):
+        return None, None, {"error": "Matrix room is not allowed or joined"}
+    chat_type = "dm" if await adapter._is_dm_room(room_id) else "group"
+    if adapter._is_sender_authorized(requester, chat_type=chat_type, chat_id=room_id) is not True:
+        return None, None, {"error": "Matrix requester is not authorized for this room"}
+    client = adapter._client
+    if client is None:
+        return None, None, {"error": "Matrix client is disconnected"}
+    return client, chat_type, None
+
+
 async def read_matrix_context(
     adapter: Any, kind: str, room_id: str, event_id: str | None, limit: int,
     *, requester: str,
 ) -> dict[str, Any]:
-    if room_id not in adapter._joined_rooms or not await adapter._is_allowed_matrix_room_event(room_id):
-        return {"error": "Matrix room is not allowed or joined"}
-    chat_type = "dm" if await adapter._is_dm_room(room_id) else "group"
-    if adapter._is_sender_authorized(requester, chat_type=chat_type, chat_id=room_id) is not True:
-        return {"error": "Matrix requester is not authorized for this room"}
-    client = adapter._client
-    if client is None:
-        return {"error": "Matrix client is disconnected"}
+    client, chat_type, error = await _read_access(adapter, room_id, requester)
+    if error is not None:
+        return error
 
     root: dict[str, Any] | None = None
     if kind == "thread":

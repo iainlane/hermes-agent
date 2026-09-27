@@ -25,9 +25,11 @@ async def _matrix_read(args: dict[str, Any]) -> str:
     event_id = args.get("event_id")
     if kind == "thread" and not event_id:
         event_id = get_session_env("HERMES_SESSION_THREAD_ID")
-    if kind not in {"room", "thread", "event"}:
-        return json.dumps({"error": "kind must be room, thread, or event"})
-    if kind != "room" and (not isinstance(event_id, str) or not event_id.startswith("$")):
+    history_kinds = {"room", "thread", "event"}
+    inspection_kinds = {"state", "members", "permissions", "pins"}
+    if kind not in history_kinds | inspection_kinds:
+        return json.dumps({"error": "kind must be room, thread, event, state, members, permissions, or pins"})
+    if kind in {"thread", "event"} and (not isinstance(event_id, str) or not event_id.startswith("$")):
         return json.dumps({"error": "event_id is required for thread and event reads"})
 
     limit = args.get("limit", 20)
@@ -37,9 +39,10 @@ async def _matrix_read(args: dict[str, Any]) -> str:
     if owner_loop is None or not owner_loop.is_running():
         return json.dumps({"error": "Matrix gateway loop is unavailable"})
 
-    read = adapter.read_matrix_context(
-        kind, room_id, event_id, limit, requester=requester,
-    )
+    if kind in inspection_kinds:
+        read = adapter.inspect_matrix_room(kind, room_id, limit, requester=requester)
+    else:
+        read = adapter.read_matrix_context(kind, room_id, event_id, limit, requester=requester)
     if owner_loop is not asyncio.get_running_loop():
         try:
             future = asyncio.run_coroutine_threadsafe(read, owner_loop)
@@ -61,11 +64,11 @@ registry.register(
     toolset="matrix_read",
     schema={
         "name": "matrix_read",
-        "description": "Read recent messages, one thread, or one event in the current Matrix room.",
+        "description": "Read messages, events, state, joined members, permissions, or pins in the current Matrix room.",
         "parameters": {
             "type": "object",
             "properties": {
-                "kind": {"type": "string", "enum": ["room", "thread", "event"]},
+                "kind": {"type": "string", "enum": ["room", "thread", "event", "state", "members", "permissions", "pins"]},
                 "event_id": {"type": "string", "description": "Event ID for an event read, or thread root. A thread read defaults to the current thread."},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
             },

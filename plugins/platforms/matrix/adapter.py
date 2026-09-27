@@ -91,6 +91,7 @@ from plugins.platforms.matrix.room_context import (
 )
 from plugins.platforms.matrix.thread_context import fetch_thread_entries
 from plugins.platforms.matrix.read_context import read_matrix_context
+from plugins.platforms.matrix.room_inspection import inspect_matrix_room
 from gateway.platforms.base_exec_approval import EA_HEADER_TEXT
 from gateway.platforms.base import (
     gateway_trust_env, BasePlatformAdapter, ExecApprovalPrompt,
@@ -3037,6 +3038,11 @@ class MatrixAdapter(BasePlatformAdapter):
             self, kind, room_id, event_id, limit,
             requester=requester,
         )
+
+    async def inspect_matrix_room(
+        self, kind: str, room_id: str, limit: int, *, requester: str,
+    ) -> dict:
+        return await inspect_matrix_room(self, kind, room_id, limit, requester=requester)
 
     async def fetch_thread_context(
         self, chat_id: str, thread_id: str, *, exclude_event_id: str | None = None

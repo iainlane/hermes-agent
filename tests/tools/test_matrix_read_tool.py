@@ -42,6 +42,28 @@ async def test_matrix_read_uses_session_owner_and_rejects_other_rooms():
     )
 
 
+@pytest.mark.asyncio
+async def test_matrix_room_inspection_uses_session_owner():
+    adapter = SimpleNamespace(
+        inspect_matrix_room=AsyncMock(return_value={"room_id": "!room:server", "name": "Planning"})
+    )
+    tokens = set_session_vars(
+        platform="matrix", chat_id="!room:server", user_id="@alice:server",
+        transport_adapter=adapter,
+    )
+    try:
+        result = json.loads(await asyncio.to_thread(
+            registry.dispatch, "matrix_read", {"kind": "state"},
+        ))
+    finally:
+        clear_session_vars(tokens)
+
+    assert result == {"room_id": "!room:server", "name": "Planning"}
+    adapter.inspect_matrix_room.assert_awaited_once_with(
+        "state", "!room:server", 20, requester="@alice:server",
+    )
+
+
 def test_matrix_read_requires_live_matrix_session():
     tokens = set_session_vars(platform="cli", chat_id="!room:server")
     try:
