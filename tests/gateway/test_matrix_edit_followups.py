@@ -272,8 +272,8 @@ async def test_queue_mode_text_takes_its_own_turn_beside_a_pending_correction(mo
     adapter._active_sessions.clear()
     adapter._session_tasks.clear()
 
-    correction = ("$edit2", "[Correction to earlier message $original]\n\n[Alice] latest correction")
-    ordinary = ("$new", "and one more thing")
+    correction = ("$edit2", f"[Matrix source: https://matrix.to/#/{ROOM}/$original]\n\n[Correction to earlier message $original]\n\n[Alice] latest correction")
+    ordinary = ("$new", f"[Matrix source: https://matrix.to/#/{ROOM}/$new]\n\nand one more thing")
     assert turns == ([ordinary, correction] if text_first else [correction, ordinary])
 
 

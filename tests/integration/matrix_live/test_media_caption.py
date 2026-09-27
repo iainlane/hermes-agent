@@ -72,7 +72,11 @@ def test_media_caption_and_filename_reach_model_through_cache(
                     message for message in requests[0]["messages"] if message["role"] == "user"
                 ]
                 assert len(user_messages) == 1
-                document_note, user_text, *_ = user_messages[0]["content"].split("\n\n")
+                source_note, document_note, user_text, *_ = user_messages[0]["content"].split("\n\n")
+                server = live_room.bot.user_id.partition(":")[2]
+                assert source_note == (
+                    f"[Matrix source: https://matrix.to/#/{live_room.room_id}/{sent.event_id}?via={server}]"
+                )
                 assert user_text == caption
 
                 cached = gateway.container.exec([
@@ -220,6 +224,10 @@ def test_failed_media_reaches_model_without_download_url_or_cache(
                 content["url"] = url
             sent = await client.room_send(live_room.room_id, "m.room.message", content)
             assert isinstance(sent, RoomSendResponse), sent
+            server = live_room.bot.user_id.partition(":")[2]
+            source_note = (
+                f"[Matrix source: https://matrix.to/#/{live_room.room_id}/{sent.event_id}?via={server}]"
+            )
 
             deadline = time.monotonic() + 15
             while time.monotonic() < deadline:
@@ -247,7 +255,7 @@ def test_failed_media_reaches_model_without_download_url_or_cache(
                     {**message, "content": message["content"].split("\n\n[System note:", 1)[0]}
                     for message in user_messages
                 ]
-                assert user_messages == [{"role": "user", "content": f"{caption}\n{marker}"}]
+                assert user_messages == [{"role": "user", "content": f"{source_note}\n\n{caption}\n{marker}"}]
                 cached = gateway.container.exec([
                     "/opt/hermes/.venv/bin/python", "-c",
                     "from pathlib import Path; "
