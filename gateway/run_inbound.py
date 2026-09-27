@@ -1586,9 +1586,22 @@ class GatewayInboundMixin:
             # it's disambiguation (*which* prior message), not deduplication.
             # Adapters resolve the original message (or the user's native partial quote).
             # A preview here silently loses later list items and code; keep that context intact.
-            reply_text = event.reply_to_text
-            _who = " your previous message" if getattr(event, "reply_to_is_own_message", False) else ""
-            message_text = f'[Replying to{_who}: "{reply_text}"]\n\n{message_text}'
+            from gateway.session import neutralize_untrusted_inline_text
+
+            reply_text = (
+                neutralize_untrusted_inline_text(event.reply_to_text[:500], max_chars=0)
+                if source.platform == Platform.MATRIX else event.reply_to_text
+            )
+            if event.reply_to_is_own_message:
+                message_text = f'[Replying to your previous message: "{reply_text}"]\n\n{message_text}'
+            else:
+                author = event.reply_to_author_name or event.reply_to_author_id
+                author_label = neutralize_untrusted_inline_text(author) if author else ""
+                trust_label = "[unverified] " if event.reply_to_author_authorized is False else ""
+                if author_label:
+                    message_text = f'[Replying to {trust_label}{author_label}: "{reply_text}"]\n\n{message_text}'
+                else:
+                    message_text = f'[Replying to: {trust_label}"{reply_text}"]\n\n{message_text}'
 
         # Discord: the triggering message id goes on the per-turn user message, never the cached
         # system prompt — it changes every turn and would bust the agent-cache signature. It is
@@ -1710,6 +1723,20 @@ class GatewayInboundMixin:
         # Reset only this session's per-call buffer; other sessions may be concurrently preparing.
         self._consume_pending_native_image_paths(session_key)
 
+        thread_context = None
+        if (
+            not history and not event.internal and source.platform == Platform.MATRIX and source.thread_id
+            and source.thread_id != event.message_id
+        ):
+            adapter = self._intake_adapter_for(source)
+            if adapter is not None and hasattr(adapter, "fetch_thread_context"):
+                try:
+                    thread_context = await adapter.fetch_thread_context(
+                        source.chat_id, source.thread_id, exclude_event_id=event.message_id,
+                    )
+                except Exception as exc:
+                    logger.debug("Matrix thread context fetch failed: %s", exc)
+
         message_text = self._prefix_inbound_sender_context(event, source, message_text)
         image_paths, audio_paths, audio_file_paths, video_paths = self._classify_inbound_media(event, _pending_stt_prepared)
         if image_paths:
@@ -1722,6 +1749,9 @@ class GatewayInboundMixin:
             message_text = await self._expand_inbound_context_references(source, session_key, message_text)
             if message_text is None:
                 return None
+        # Earlier thread messages are external text; append them after @ reference expansion.
+        if thread_context:
+            message_text = f"{thread_context}\n\n{message_text}"
         # After expansion: the quoted reply is someone else's text and stays literal — an
         # ``@file:`` inside it must never read a local file on the replier's behalf.
         return self._prepend_inbound_reply_context(event, source, message_text)
