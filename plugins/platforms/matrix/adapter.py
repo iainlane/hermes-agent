@@ -1306,6 +1306,10 @@ class MatrixAdapter(MatrixApprovalMixin, MatrixReactionPromptMixin, MatrixRTCVoi
         except Exception as exc:
             return SendResult(success=False, error=f"Matrix target '{target}': {exc}")
         chat_id, metadata = destination.room_id, destination.metadata
+        meta = metadata or {}
+        stream_continuation = meta.get("_stream_continuation") is True
+        if stream_continuation:
+            reply_to = meta.get("_stream_reply_to_message_id")
         last_event_id = None
         event_ids: list[str] = []
         formatted = self.format_message(content)
@@ -1315,7 +1319,7 @@ class MatrixAdapter(MatrixApprovalMixin, MatrixReactionPromptMixin, MatrixRTCVoi
         chunks = [formatted] if single_event else self.truncate_message(formatted, self.max_message_length)
         for index, chunk in enumerate(chunks):
             msg_content = self._build_text_message_content(chunk)
-            chunk_reply_to = reply_to if self._should_reply_anchor(reply_to, index) else None
+            chunk_reply_to = reply_to if self._should_reply_anchor(reply_to, index + int(stream_continuation)) else None
             self._apply_relation_metadata(chat_id, msg_content, reply_to=chunk_reply_to, metadata=metadata)
             if (metadata or {}).get("non_conversational"):
                 msg_content[NON_CONVERSATIONAL_KEY] = True
