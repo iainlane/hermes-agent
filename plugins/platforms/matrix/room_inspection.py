@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import Any
 
 from plugins.platforms.matrix.read_context import _read_access, _raw_event, _visible_event
@@ -33,18 +34,23 @@ def _text(content: dict[str, Any], field: str) -> str | None:
     return value[:1200] if isinstance(value, str) and value else None
 
 
-def _level(content: dict[str, Any], key: str, default: int) -> int:
-    value = content.get(key)
-    return value if isinstance(value, int) and not isinstance(value, bool) else default
-
-
-def _user_level(content: dict[str, Any], user_id: str) -> int:
-    users = content.get("users")
-    users = users if isinstance(users, dict) else {}
-    value = users.get(user_id)
+def _numeric_level(value: Any, default: int, legacy_strings: bool) -> int:
     if isinstance(value, int) and not isinstance(value, bool):
         return value
-    return _level(content, "users_default", 0)
+    if legacy_strings and isinstance(value, str) and re.fullmatch(r"\s*[+-]?[0-9]+\s*", value):
+        return int(value)
+    return default
+
+
+def _level(content: dict[str, Any], key: str, default: int, legacy_strings: bool) -> int:
+    return _numeric_level(content.get(key), default, legacy_strings)
+
+
+def _user_level(content: dict[str, Any], user_id: str, legacy_strings: bool) -> int:
+    users = content.get("users")
+    users = users if isinstance(users, dict) else {}
+    default = _level(content, "users_default", 0, legacy_strings)
+    return _numeric_level(users.get(user_id), default, legacy_strings)
 
 
 async def _permissions(client: Any, room_id: str, requester: str, bot: str) -> dict[str, Any]:
@@ -54,32 +60,41 @@ async def _permissions(client: Any, room_id: str, requester: str, bot: str) -> d
         client.get_state_event(room_id, "m.room.create", format="event"), timeout=10.0,
     )
     create = _content(create_event)
+    room_version = _text(create, "room_version") or "1"
+    numeric_version = int(room_version) if room_version.isdecimal() else None
+    legacy_strings = numeric_version is not None and numeric_version <= 9
     events = power.get("events")
     events = events if isinstance(events, dict) else {}
-    pin_level = events.get("m.room.pinned_events")
-    if not isinstance(pin_level, int) or isinstance(pin_level, bool):
-        pin_level = _level(power, "state_default", 50)
+    pin_level = _numeric_level(
+        events.get("m.room.pinned_events"),
+        _level(power, "state_default", 50, legacy_strings), legacy_strings,
+    )
     send_event_type = "m.room.encrypted" if _text(encryption, "algorithm") else "m.room.message"
-    message_level = events.get(send_event_type)
-    if not isinstance(message_level, int) or isinstance(message_level, bool):
-        message_level = _level(power, "events_default", 0)
-    bot_level = _user_level(power, bot)
-    requester_level = _user_level(power, requester)
-    room_version = _text(create, "room_version") or "1"
-    creator_ids = {create.get("creator")}
+    message_level = _numeric_level(
+        events.get(send_event_type),
+        _level(power, "events_default", 0, legacy_strings), legacy_strings,
+    )
+    bot_level = _user_level(power, bot, legacy_strings)
+    requester_level = _user_level(power, requester, legacy_strings)
+    creator_ids: set[str] = set()
     creator_sender = getattr(create_event, "sender", None)
     if isinstance(create_event, dict):
         creator_sender = create_event.get("sender")
     if isinstance(creator_sender, str):
         creator_ids.add(creator_sender)
-    additional = create.get("additional_creators")
-    if isinstance(additional, list):
-        creator_ids.update(value for value in additional if isinstance(value, str))
-    if not power and bot in creator_ids and room_version.isdecimal() and int(room_version) < 12:
+    elif numeric_version is not None and numeric_version < 11:
+        legacy_creator = create.get("creator")
+        if isinstance(legacy_creator, str):
+            creator_ids.add(legacy_creator)
+    creator_override = numeric_version is not None and numeric_version >= 12
+    if creator_override:
+        additional = create.get("additional_creators")
+        if isinstance(additional, list):
+            creator_ids.update(value for value in additional if isinstance(value, str))
+    if not power and bot in creator_ids and not creator_override:
         bot_level = 100
-    if not power and requester in creator_ids and room_version.isdecimal() and int(room_version) < 12:
+    if not power and requester in creator_ids and not creator_override:
         requester_level = 100
-    creator_override = room_version.isdecimal() and int(room_version) >= 12
     bot_is_creator = bot in creator_ids and creator_override
     return {
         "requester": {"user_id": requester, "level": requester_level,
@@ -89,10 +104,10 @@ async def _permissions(client: Any, room_id: str, requester: str, bot: str) -> d
             "send_message": message_level,
             "send_event_type": send_event_type,
             "edit_pins": pin_level,
-            "invite": _level(power, "invite", 0),
-            "kick": _level(power, "kick", 50),
-            "ban": _level(power, "ban", 50),
-            "redact_other": _level(power, "redact", 50),
+            "invite": _level(power, "invite", 0, legacy_strings),
+            "kick": _level(power, "kick", 50, legacy_strings),
+            "ban": _level(power, "ban", 50, legacy_strings),
+            "redact_other": _level(power, "redact", 50, legacy_strings),
         },
         "bot_can_edit_pins": bot_is_creator or bot_level >= pin_level,
     }

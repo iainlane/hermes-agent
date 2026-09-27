@@ -123,3 +123,81 @@ async def test_room_permissions_include_version_12_creator_override():
                      "kick": 50, "ban": 50, "redact_other": 50},
         "bot_can_edit_pins": True,
     }
+
+
+@pytest.mark.asyncio
+async def test_old_room_power_levels_accept_numeric_strings():
+    power = {
+        "users": {"@bot:server": " +100 ", "@alice:server": "-5"},
+        "events": {"m.room.pinned_events": " 075 ", "m.room.message": "+10"},
+        "invite": " 25 ",
+    }
+    try:
+        from mautrix.types import StateEvent
+    except ImportError:
+        pass
+    else:
+        power = StateEvent.deserialize_content({
+            **power, "__mautrix_event_type": "m.room.power_levels",
+        })
+
+    async def get_state_event(room_id, event_type, **kwargs):
+        if event_type == "m.room.create":
+            return {"sender": "@alice:server", "content": {"room_version": "9"}}
+        if event_type == "m.room.encryption":
+            return {}
+        return power
+
+    adapter = SimpleNamespace(
+        _client=SimpleNamespace(get_state_event=AsyncMock(side_effect=get_state_event)),
+        _joined_rooms={"!room:server"}, _user_id="@bot:server",
+        _is_allowed_matrix_room_event=AsyncMock(return_value=True),
+        _is_dm_room=AsyncMock(return_value=False),
+        _is_sender_authorized=lambda user, **kw: True,
+    )
+
+    result = await inspect_matrix_room(
+        adapter, "permissions", "!room:server", 20, requester="@alice:server"
+    )
+
+    assert result == {
+        "requester": {"user_id": "@alice:server", "level": -5, "creator_override": False},
+        "bot": {"user_id": "@bot:server", "level": 100, "creator_override": False},
+        "required": {"send_message": 10, "send_event_type": "m.room.message",
+                     "edit_pins": 75, "invite": 25,
+                     "kick": 50, "ban": 50, "redact_other": 50},
+        "bot_can_edit_pins": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_version_12_ignores_legacy_creator_property():
+    async def get_state_event(room_id, event_type, **kwargs):
+        if event_type == "m.room.create":
+            return {"sender": "@alice:server", "content": {
+                "room_version": "12", "creator": "@bot:server",
+            }}
+        if event_type == "m.room.encryption":
+            return {}
+        return {"users_default": 0, "events": {"m.room.pinned_events": 75}}
+
+    adapter = SimpleNamespace(
+        _client=SimpleNamespace(get_state_event=AsyncMock(side_effect=get_state_event)),
+        _joined_rooms={"!room:server"}, _user_id="@bot:server",
+        _is_allowed_matrix_room_event=AsyncMock(return_value=True),
+        _is_dm_room=AsyncMock(return_value=False),
+        _is_sender_authorized=lambda user, **kw: True,
+    )
+
+    result = await inspect_matrix_room(
+        adapter, "permissions", "!room:server", 20, requester="@alice:server"
+    )
+
+    assert result == {
+        "requester": {"user_id": "@alice:server", "level": 0, "creator_override": True},
+        "bot": {"user_id": "@bot:server", "level": 0, "creator_override": False},
+        "required": {"send_message": 0, "send_event_type": "m.room.message",
+                     "edit_pins": 75, "invite": 0,
+                     "kick": 50, "ban": 50, "redact_other": 50},
+        "bot_can_edit_pins": False,
+    }
