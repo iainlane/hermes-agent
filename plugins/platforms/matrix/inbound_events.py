@@ -293,7 +293,10 @@ class MatrixInboundEventMixin(BasePlatformAdapter):
             chat_id=room_id, chat_name=identity.display_name, chat_type=chat_type, user_id=sender,
             user_name=display_name, thread_id=thread_id, chat_topic=identity.room_topic,
             guild_id=identity.server_name, parent_chat_id=room_id if thread_id else None, message_id=event_id,
-            source_permalink=self._build_source_permalink(room_id, thread_id or event_id, identity.server_name))
+            source_permalink=self._build_source_permalink(
+                room_id, thread_id or event_id,
+                identity.server_name or (self._user_id or "").partition(":")[2] or None,
+            ))
         if record:
             if thread_id:
                 await self._threads.mark_async(thread_id)  # covers real roots and synthetic ones alike
