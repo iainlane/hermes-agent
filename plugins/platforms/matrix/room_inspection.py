@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import re
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Awaitable, Callable
 
 from plugins.platforms.matrix.read_context import _read_access, _raw_event, _visible_event
 
@@ -128,64 +129,93 @@ async def _pinned_event(
     return visible, error
 
 
+@dataclass(frozen=True)
+class _InspectionContext:
+    adapter: Any
+    client: Any
+    room_id: str
+    chat_type: str
+    requester: str
+    limit: int
+
+
+async def _inspect_state(context: _InspectionContext) -> dict[str, Any]:
+    fields = {
+        "name": ("m.room.name", "name"),
+        "topic": ("m.room.topic", "topic"),
+        "canonical_alias": ("m.room.canonical_alias", "alias"),
+        "join_rule": ("m.room.join_rules", "join_rule"),
+        "history_visibility": ("m.room.history_visibility", "history_visibility"),
+        "encryption": ("m.room.encryption", "algorithm"),
+    }
+    result = {"room_id": context.room_id}
+    for key, (event_type, field) in fields.items():
+        result[key] = _text(await _state(context.client, context.room_id, event_type), field)
+    return result
+
+
+async def _inspect_members(context: _InspectionContext) -> dict[str, Any]:
+    profiles = await asyncio.wait_for(context.client.get_joined_members(context.room_id), timeout=10.0)
+    members = []
+    for user_id, profile in sorted(profiles.items(), key=lambda item: str(item[0]))[:context.limit]:
+        content = _content(profile)
+        display_name = _text(content, "displayname") or getattr(profile, "displayname", None)
+        avatar_url = _text(content, "avatar_url") or getattr(profile, "avatar_url", None)
+        members.append({
+            "user_id": str(user_id),
+            "display_name": str(display_name)[:1200] if display_name else None,
+            "avatar_url": str(avatar_url)[:1200] if avatar_url else None,
+        })
+    return {"members": members, "total": len(profiles), "truncated": len(profiles) > context.limit}
+
+
+async def _inspect_permissions(context: _InspectionContext) -> dict[str, Any]:
+    return await _permissions(context.client, context.room_id, context.requester, context.adapter._user_id)
+
+
+async def _inspect_pins(context: _InspectionContext) -> dict[str, Any]:
+    pinned = await _state(context.client, context.room_id, "m.room.pinned_events")
+    event_ids = pinned.get("pinned")
+    if not isinstance(event_ids, list) or not all(isinstance(value, str) for value in event_ids):
+        event_ids = []
+    selected = event_ids[:context.limit]
+    semaphore = asyncio.Semaphore(10)
+
+    async def fetch(event_id: str) -> tuple[dict | None, dict | None]:
+        async with semaphore:
+            return await _pinned_event(
+                context.adapter, context.client, context.room_id, context.chat_type, event_id,
+            )
+
+    resolved = await asyncio.gather(*(fetch(event_id) for event_id in selected))
+    return {
+        "events": [visible for visible, _ in resolved if visible is not None],
+        "total": len(event_ids), "truncated": len(event_ids) > context.limit,
+        "errors": [failure for _, failure in resolved if failure is not None],
+    }
+
+
+_INSPECTION_HANDLERS: dict[str, Callable[[_InspectionContext], Awaitable[dict[str, Any]]]] = {
+    "state": _inspect_state,
+    "members": _inspect_members,
+    "permissions": _inspect_permissions,
+    "pins": _inspect_pins,
+}
+
+
 async def inspect_matrix_room(
     adapter: Any, kind: str, room_id: str, limit: int, *, requester: str,
 ) -> dict[str, Any]:
     client, chat_type, error = await _read_access(adapter, room_id, requester)
     if error is not None:
         return error
+    assert chat_type is not None
+    handler = _INSPECTION_HANDLERS.get(kind)
+    if handler is None:
+        return {"error": "kind must be state, members, permissions, or pins"}
 
+    context = _InspectionContext(adapter, client, room_id, chat_type, requester, limit)
     try:
-        if kind == "state":
-            fields = {
-                "name": ("m.room.name", "name"),
-                "topic": ("m.room.topic", "topic"),
-                "canonical_alias": ("m.room.canonical_alias", "alias"),
-                "join_rule": ("m.room.join_rules", "join_rule"),
-                "history_visibility": ("m.room.history_visibility", "history_visibility"),
-                "encryption": ("m.room.encryption", "algorithm"),
-            }
-            result = {"room_id": room_id}
-            for key, (event_type, field) in fields.items():
-                result[key] = _text(await _state(client, room_id, event_type), field)
-            return result
-
-        if kind == "members":
-            profiles = await asyncio.wait_for(client.get_joined_members(room_id), timeout=10.0)
-            members = []
-            for user_id, profile in sorted(profiles.items(), key=lambda item: str(item[0]))[:limit]:
-                content = _content(profile)
-                display_name = _text(content, "displayname") or getattr(profile, "displayname", None)
-                avatar_url = _text(content, "avatar_url") or getattr(profile, "avatar_url", None)
-                members.append({
-                    "user_id": str(user_id),
-                    "display_name": str(display_name)[:1200] if display_name else None,
-                    "avatar_url": str(avatar_url)[:1200] if avatar_url else None,
-                })
-            return {"members": members, "total": len(profiles), "truncated": len(profiles) > limit}
-
-        if kind == "permissions":
-            return await _permissions(client, room_id, requester, adapter._user_id)
-
-        if kind == "pins":
-            pinned = await _state(client, room_id, "m.room.pinned_events")
-            event_ids = pinned.get("pinned")
-            if not isinstance(event_ids, list) or not all(isinstance(value, str) for value in event_ids):
-                event_ids = []
-            selected = event_ids[:limit]
-            semaphore = asyncio.Semaphore(10)
-
-            async def fetch(event_id: str) -> tuple[dict | None, dict | None]:
-                async with semaphore:
-                    return await _pinned_event(adapter, client, room_id, chat_type, event_id)
-
-            resolved = await asyncio.gather(*(fetch(event_id) for event_id in selected))
-            return {
-                "events": [visible for visible, _ in resolved if visible is not None],
-                "total": len(event_ids), "truncated": len(event_ids) > limit,
-                "errors": [failure for _, failure in resolved if failure is not None],
-            }
+        return await handler(context)
     except Exception as exc:
         return {"error": f"Matrix room inspection failed: {type(exc).__name__}"}
-
-    return {"error": "kind must be state, members, permissions, or pins"}
