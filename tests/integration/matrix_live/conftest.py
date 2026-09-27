@@ -66,6 +66,7 @@ class LiveRoom:
 class GatewaySettings:
     reply: str = "Matrix live reply"
     max_message_length: int | None = None
+    reply_to_mode: str | None = None
     mode: str | None = None
 
 
@@ -605,6 +606,10 @@ def gateway(
     script: list[Response] | Responder | None = model_responder
     if script is None:
         script = [] if mode == "inspection" else [Text(settings.reply)]
+    if settings.reply_to_mode is not None:
+        gateway_config = gateway_config.replace(
+            "    enabled: true\n", f'    enabled: true\n    reply_to_mode: "{settings.reply_to_mode}"\n', 1,
+        )
     with FakeLLMServer(
         script, bind_host=route.bind_host, default_text=settings.reply if mode == "inspection" else "ok",
     ) as model:

@@ -49,19 +49,14 @@ class _RoomIdentityResolver(Protocol):
 class MatrixDeliveryMixin:
     _reply_to_mode: str
 
-    def _should_reply_anchor(self, reply_to: Optional[str], chunk_index: int) -> bool:
-        """Whether this chunk (0 = first) carries the plain m.in_reply_to anchor, per reply_to_mode.
-
-        Mirrors Telegram's _should_thread_reply: "off" never, "all" always, "first" (default)
-        only chunk 0. Thread relations are per-send, not chunk-gated (see _apply_relation_metadata).
-        """
+    def _should_reply_anchor(self, reply_to: str | None, chunk_index: int) -> bool:
         if not reply_to:
             return False
         if self._reply_to_mode == "off":
             return False
         if self._reply_to_mode == "all":
             return True
-        return chunk_index == 0  # "first" (default)
+        return chunk_index == 0
 
     _client: Any
     _user_id: str
