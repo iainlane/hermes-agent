@@ -295,7 +295,7 @@ class MatrixInboundEventMixin(BasePlatformAdapter):
             guild_id=identity.server_name, parent_chat_id=room_id if thread_id else None, message_id=event_id,
             source_permalink=self._build_source_permalink(
                 room_id, thread_id or event_id,
-                identity.server_name or (self._user_id or "").partition(":")[2] or None,
+                (self._user_id or "").partition(":")[2] or identity.server_name,
             ))
         if record:
             if thread_id:
