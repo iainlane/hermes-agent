@@ -646,7 +646,7 @@ def gateway(
                     1,
                 )
                 + ("auxiliary:\n  background_review:\n    enabled: false\n  title_generation:\n    model_upgrade_enabled: false\n"
-                   if mode in {"inspection", "pause-image-context", "image-packs"} else "")
+                   if mode in {"inspection", "pause-image-context", "image-packs", "polls"} else "")
                 + ("auxiliary:\n  background_review:\n    enabled: false\n  title_generation:\n    enabled: false\n    model_upgrade_enabled: false\n"
                    if mode in {"pause-edit-followups", "pause-edit-default"} else "")
                 + ("plugins:\n  enabled:\n    - matrix-live-context\n"

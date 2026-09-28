@@ -47,6 +47,7 @@ _FEISHU_TOOLS = [
     "feishu_doc_read", "feishu_drive_list_comments", "feishu_drive_list_comment_replies",
     "feishu_drive_reply_comment", "feishu_drive_add_comment",
 ]
+_MATRIX_POLL_TOOLS = ["matrix_poll_create", "matrix_poll_vote", "matrix_poll_results", "matrix_poll_close"]
 _YUANBAO_TOOLS = ["yb_query_group_info", "yb_query_group_members", "yb_send_dm", "yb_search_sticker", "yb_send_sticker"]
 
 
@@ -174,13 +175,14 @@ TOOLSETS = {
     "discord": _ts("Discord read and participate tools (fetch messages, search members, create threads)", ["discord"]),
     "discord_admin": _ts("Discord server management (list channels/roles, pin messages, assign roles)", ["discord_admin"]),
     "matrix_image_packs": _ts("List and send Matrix image-pack stickers", ["matrix_image_packs"]),
+    "matrix_polls": _ts("Native Matrix polls", _MATRIX_POLL_TOOLS),
     "matrix_threads": _ts("Create threads in the current Matrix room", ["matrix_thread_create"]),
     "matrix_read": _ts("Read Matrix history and inspect the current room", ["matrix_read"]),
     "matrix_reaction": _ts("React to messages in the current Matrix room", ["matrix_reaction"]),
     "matrix_followup": _ts("Watch a Matrix reply for a requester reaction", ["matrix_followup"]),
     "matrix_admin": _ts("Change Matrix room state with server permission checks", ["matrix_room_admin", "matrix_pin"]),
 
-    "matrix_unread": _ts("Read Matrix notifications and explicitly acknowledge events", ["matrix_unread", "matrix_mark_read"]),
+    "matrix_unread": _ts("Read Matrix notifications and explicitly acknowledge events", ["matrix_unread", "matrix_mark_read", *_MATRIX_POLL_TOOLS]),
     "yuanbao": _ts("Yuanbao platform tools - group info, member queries, DM, stickers", _YUANBAO_TOOLS),
     "feishu_doc": _ts("Read Feishu/Lark document content", ["feishu_doc_read"]),
     "feishu_drive": _ts("Feishu/Lark document comment operations (list, reply, add)", _FEISHU_TOOLS[1:]),
