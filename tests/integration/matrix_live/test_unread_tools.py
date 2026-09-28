@@ -24,8 +24,12 @@ from tests.integration.matrix_live.conftest import (
 
 
 @pytest.fixture
-def gateway_config() -> str:
-    return "platforms:\n  matrix:\n    enabled: true\nupdates:\n  check: false\n"
+def gateway_config(live_room: LiveRoom) -> str:
+    return (
+        "platforms:\n  matrix:\n    enabled: true\n"
+        f"    allowed_users: '{live_room.observer.user_id}'\n"
+        "updates:\n  check: false\n"
+    )
 
 
 @pytest.fixture
