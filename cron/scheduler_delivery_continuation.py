@@ -124,7 +124,7 @@ def _cron_mirror_message(job: dict, text: str) -> str:
 
 def _maybe_mirror_cron_delivery(
     job: dict, platform_name: str, chat_id: str, mirror_text: str, thread_id: Optional[str] = None,
-    user_id: Optional[str] = None, *, enabled: bool = False,
+    user_id: Optional[str] = None, *, enabled: bool = False, chat_type: Optional[str] = None,
 ) -> None:
     """Best-effort mirror of a cron delivery into the origin chat's session. No-op unless
     ``enabled`` (caller resolves it, scoped to the origin target). Rides the same
@@ -147,7 +147,8 @@ def _maybe_mirror_cron_delivery(
         # SQLite mirror metadata would otherwise lose on replay.
         ok = mirror_to_session(
             platform_name, str(chat_id), _cron_mirror_message(job, text),
-            source_label="cron", thread_id=thread_id, user_id=user_id, role="user")
+            source_label="cron", thread_id=thread_id, user_id=user_id, role="user",
+            **({"chat_type": chat_type} if platform_name == "matrix" else {}))
         if ok:
             logger.info(
                 "Job '%s': mirrored delivery into %s:%s session transcript",
@@ -323,6 +324,11 @@ def _seed_live_delivery_sessions(t: _TargetDelivery, delivered_message_id) -> No
     Thread seeding is deferred here so open-succeeds/deliver-fails never seeds an unseen brief."""
     job = t.job
     origin = t.origin
+    if (
+        t.platform_name == "matrix"
+        and (t.resolved_source is None or t.resolved_source.chat_type not in {"dm", "group"})
+    ):
+        return
     seed_kwargs = dict(
         chat_name=origin.get("chat_name"), is_dm=t.is_dm_target, scope_id=origin.get("scope_id"))
     thread_seeded = False
@@ -367,4 +373,5 @@ def _seed_live_delivery_sessions(t: _TargetDelivery, delivered_message_id) -> No
     _maybe_mirror_cron_delivery(
         job, t.platform_name, t.chat_id, t.mirror_text, thread_id=t.thread_id,
         user_id=t.origin_user_id,
-        enabled=t.mirror_this_target and not thread_seeded and not inchannel_seeded)
+        enabled=t.mirror_this_target and not thread_seeded and not inchannel_seeded,
+        chat_type=t.resolved_source.chat_type if t.resolved_source is not None else None)
