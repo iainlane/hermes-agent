@@ -17,7 +17,7 @@ from agent.i18n import t
 from agent.session_activity import format_iteration_progress
 from contextlib import suppress
 from gateway.config import Platform
-from gateway.platforms.base import BasePlatformAdapter
+from gateway.platforms.base import BasePlatformAdapter, ProcessingOutcome
 from gateway.inbound_context import PreparedInboundMessage
 from gateway.response_filters import (
     silence_allowed, reply_expected_metadata,
@@ -127,6 +127,7 @@ class GatewayTurnExecutionMixin:
                 prepared.message_text = event._prepared_inbound.message_text
                 prepared.persist_user_message = event._prepared_inbound.persist_user_message
                 prepared.persist_user_timestamp = event._prepared_inbound.persist_user_timestamp
+            event._processing_state.outcome = ProcessingOutcome.from_agent_result(agent_result)
             _turn_seconds = time.monotonic() - _turn_started_monotonic
 
             # A queued (/queue) chain answered the LAST message of the chain, so the outer final
@@ -182,6 +183,7 @@ class GatewayTurnExecutionMixin:
             )
 
         except Exception as e:
+            event._processing_state.outcome = ProcessingOutcome.FAILURE
             return await self._hmwa_agent_error_reply(e, event, source, session_entry, session_key, prepared)
         finally:
             from gateway.pending_execution import consume_pending_execution
