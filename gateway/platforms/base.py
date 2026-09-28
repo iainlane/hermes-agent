@@ -3473,11 +3473,23 @@ class BasePlatformAdapter(ABC):
         if emoji:
             await add(chat_id, message_id, emoji)
 
+    async def on_inline_processing_complete(self, event: MessageEvent, outcome: ProcessingOutcome) -> None:
+        """Acknowledge an inline command without changing the active turn's lifecycle."""
+
     async def _run_processing_hook(self, hook_name: str, *args: Any, **kwargs: Any) -> None:
         """Run a lifecycle hook without letting failures break message flow."""
         hook = getattr(self, hook_name, None)
         if not callable(hook):
             return
+        event = args[0] if args else None
+        if isinstance(event, MessageEvent):
+            if hook_name == "on_processing_start":
+                event._processing_state.deferred = False
+                event._processing_state.completed = False
+            elif hook_name in {"on_processing_complete", "on_inline_processing_complete"}:
+                if event._processing_state.deferred or event._processing_state.completed:
+                    return
+                event._processing_state.completed = True
         try:
             await hook(*args, **kwargs)
         except Exception as e:
@@ -3527,6 +3539,7 @@ class BasePlatformAdapter(ABC):
         response = await self._message_handler(event)
         text, eph_ttl = self._unwrap_ephemeral(response)
         if not text:
+            await self._run_processing_hook("on_inline_processing_complete", event, ProcessingOutcome.SUCCESS)
             return
         if log_cmd is not None:
             logger.info("[%s] Sending command '/%s' response (%d chars) to %s", self.name, log_cmd,
@@ -3536,6 +3549,9 @@ class BasePlatformAdapter(ABC):
             metadata=_mark_notify_metadata(thread_meta))
         if eph_ttl > 0 and result.success and result.message_id:
             self._schedule_ephemeral_delete(event.source.chat_id, result.message_id, eph_ttl)
+        await self._run_processing_hook(
+            "on_inline_processing_complete", event,
+            ProcessingOutcome.SUCCESS if result.success else ProcessingOutcome.FAILURE)
 
     def _media_delivery_scope(self, source: Optional[SessionSource]):
         """Routed home + terminal policy for post-handler text, media and error delivery;

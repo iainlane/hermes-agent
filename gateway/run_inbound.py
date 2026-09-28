@@ -215,6 +215,7 @@ class GatewayInboundMixin:
             and not getattr(event, "_hermes_startup_restore_replay", False)
         ):
             self._queue_startup_restore_event(event)
+            event._processing_state.deferred = True
             return None
 
         if is_internal:
@@ -571,6 +572,7 @@ class GatewayInboundMixin:
         adapter = self._delivery_adapter_for(source)
         if adapter:
             merge_pending_message_event(adapter._pending_messages, _quick_key, event, merge_text=merge_text)
+            event._processing_state.deferred = True
 
     async def _hm_busy_slash_or_photo(
         self, event: "MessageEvent", source: SessionSource, _quick_key: str
@@ -683,6 +685,7 @@ class GatewayInboundMixin:
         if _handled:
             return _result
 
+        event._processing_state.deferred = True
         effective_busy_input_mode = self._effective_busy_input_mode(source)
         if self._hm_busy_telegram_grace_queue(event, source, _quick_key, effective_busy_input_mode):
             return None
@@ -698,6 +701,7 @@ class GatewayInboundMixin:
             return None
         if self._draining:
             queue_during_drain = self._queue_during_drain_enabled(effective_busy_input_mode)
+            event._processing_state.deferred = queue_during_drain
             if queue_during_drain:
                 self._queue_or_replace_pending_event(_quick_key, event)
             return (

@@ -270,6 +270,11 @@ def matrix_feedback() -> MatrixFeedbackSettings:
 
 
 @pytest.fixture
+def gateway_busy_input_mode() -> str:
+    return "interrupt"
+
+
+@pytest.fixture
 def gateway(
     tmp_path: Path,
     gateway_image: str,
@@ -277,6 +282,7 @@ def gateway(
     live_room: LiveRoom,
     model_responder: Callable[[dict], Text],
     matrix_feedback: MatrixFeedbackSettings,
+    gateway_busy_input_mode: str,
 ) -> Iterator[LiveGateway]:
     _, _, network = synapse
     room_id = live_room.room_id
@@ -290,6 +296,7 @@ def gateway(
                 "platforms:\n  matrix:\n    enabled: true\n"
                 f"    read_receipts: {matrix_feedback.read_receipts}\n"
                 f"    reactions: {str(matrix_feedback.reactions).lower()}\n"
+                f"display:\n  busy_input_mode: {gateway_busy_input_mode}\n  busy_text_mode: interrupt\n"
                 "updates:\n  check: false\n"
             ),
         )

@@ -2452,16 +2452,23 @@ class MatrixAdapter(BasePlatformAdapter):
 
     async def on_processing_start(self, event: MessageEvent) -> None:
         msg_id, room_id = event.message_id, event.source.chat_id
-        if self._reactions_enabled and msg_id and room_id:
+        if self._reactions_enabled and msg_id and room_id and (room_id, msg_id) not in self._pending_reactions:
             reaction_event_id = await self._send_reaction(room_id, msg_id, "\U0001f440")
             if reaction_event_id:
                 self._pending_reactions[(room_id, msg_id)] = reaction_event_id
 
-    async def on_processing_complete(self, event: MessageEvent, outcome: ProcessingOutcome) -> None:
+    def _send_processing_read_receipt(self, event: MessageEvent, outcome: ProcessingOutcome) -> None:
         msg_id, room_id = event.message_id, event.source.chat_id
         receipt_id = event.read_receipt_message_id or msg_id
         if self._read_receipts_mode.should_send_on_completion(outcome) and receipt_id and room_id:
             self._background_read_receipt(room_id, receipt_id)
+
+    async def on_inline_processing_complete(self, event: MessageEvent, outcome: ProcessingOutcome) -> None:
+        self._send_processing_read_receipt(event, outcome)
+
+    async def on_processing_complete(self, event: MessageEvent, outcome: ProcessingOutcome) -> None:
+        self._send_processing_read_receipt(event, outcome)
+        msg_id, room_id = event.message_id, event.source.chat_id
         if not self._reactions_enabled or not msg_id or not room_id or outcome == ProcessingOutcome.CANCELLED:
             return
         eyes_event_id = self._pending_reactions.pop((room_id, msg_id), None)
