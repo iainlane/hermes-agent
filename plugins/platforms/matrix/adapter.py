@@ -87,9 +87,11 @@ from plugins.platforms.matrix.room_context import (
     room_state_change_note,
 )
 from plugins.platforms.matrix.relations import MatrixRelation
+from plugins.platforms.matrix.effective_event import event_content
+from plugins.platforms.matrix.rich_content import MatrixRichContentMixin, inbound_event
 from plugins.platforms.matrix.context_mixin import MatrixContextMixin
 from plugins.platforms.matrix.reply_context import (
-    MatrixEventContext, MatrixEventContextCache, MatrixReplyContext, extract_mx_reply_quote,
+    MatrixEventContext, MatrixEventContextCache, MatrixReplyContext, extract_mx_reply_quote, _label_body,
 )
 from plugins.platforms.matrix.read_context import read_matrix_context
 from gateway.platforms.base_exec_approval import EA_HEADER_TEXT
@@ -852,7 +854,7 @@ class _CryptoStateStore:
         return list(self._joined_rooms)  # all joined rooms: correct for a single-user bot
 
 
-class MatrixAdapter(MatrixContextMixin, BasePlatformAdapter):
+class MatrixAdapter(MatrixRichContentMixin, MatrixContextMixin, BasePlatformAdapter):
     """Gateway adapter for Matrix (any homeserver)."""
 
     supports_code_blocks = True  # Matrix renders fenced code blocks (HTML/markdown)
@@ -1401,6 +1403,9 @@ class MatrixAdapter(MatrixContextMixin, BasePlatformAdapter):
         from mautrix.client.dispatcher import MembershipEventDispatcher
         client.add_dispatcher(MembershipEventDispatcher)  # without this INVITE never fires
         client.add_event_handler(EventType.ROOM_MESSAGE, self._on_room_message, wait_sync=True)
+        sticker_type = getattr(EventType, "STICKER", None)
+        if sticker_type is not None:
+            client.add_event_handler(sticker_type, self._on_room_message, wait_sync=True)
         client.add_event_handler(EventType.REACTION, self._on_reaction, wait_sync=True)
         client.add_event_handler(IntEvt.INVITE, self._on_invite, wait_sync=True)
         redaction_type = getattr(EventType, "ROOM_REDACTION", None)
@@ -2048,6 +2053,7 @@ class MatrixAdapter(MatrixContextMixin, BasePlatformAdapter):
             self._clock_skew_warned = True
 
     async def _on_room_message(self, event: Any) -> None:
+        event = inbound_event(event)
         room_id = str(getattr(event, "room_id", ""))
         sender = str(getattr(event, "sender", ""))
         # DEBUG-level proof the callback fires at all (silent-inbound troubleshooting).
@@ -2069,11 +2075,8 @@ class MatrixAdapter(MatrixContextMixin, BasePlatformAdapter):
         content = getattr(event, "content", None)
         if content is None:
             return
-        if isinstance(content, dict):
-            source_content, msgtype = content, content.get("msgtype", "")
-        else:
-            source_content = content.serialize() if hasattr(content, "serialize") else {}
-            msgtype = str(content.msgtype) if hasattr(content, "msgtype") else ""
+        source_content = event_content(event)
+        msgtype = str(source_content.get("msgtype") or "")
         relates_to = source_content.get("m.relates_to", {})
         reply_target = MatrixRelation.from_content(relates_to).reply_target
         reply_parent = self._event_context_cache.retain(room_id, reply_target) if reply_target else None
@@ -2106,12 +2109,21 @@ class MatrixAdapter(MatrixContextMixin, BasePlatformAdapter):
         # m.notice is the conventional bot-response msgtype; ignoring it prevents bot-to-bot loops.
         if msgtype == "m.notice" and not self._process_notices:
             return
-        if msgtype in ("m.image", "m.audio", "m.video", "m.file"):
+        if msgtype in {"m.emote", "m.sticker"}:
+            self._event_context_cache.store(room_id, event_id, MatrixEventContext(
+                sender, _label_body(msgtype, str(source_content.get("body") or ""), sender),
+                is_image=msgtype == "m.sticker", media_content=MatrixEventContext.image_content(source_content),
+            ))
+        if msgtype in ("m.image", "m.audio", "m.video", "m.file", "m.sticker"):
             await self._handle_media_message(
                 room_id, sender, event_id, event_ts, source_content, relates_to, msgtype,
                 reply_parent=reply_parent)
         elif msgtype in ("m.text", "m.notice"):
             await self._handle_text_message(
+                room_id, sender, event_id, event_ts, source_content, relates_to,
+                reply_parent=reply_parent)
+        elif msgtype == "m.emote":
+            await self._handle_emote_message(
                 room_id, sender, event_id, event_ts, source_content, relates_to,
                 reply_parent=reply_parent)
 
@@ -2126,10 +2138,16 @@ class MatrixAdapter(MatrixContextMixin, BasePlatformAdapter):
         identity = await self._resolve_room_identity(room_id)
         is_dm = await self._is_dm_room(room_id)
         chat_type = "dm" if is_dm else "group"
+        if source_content.get("msgtype") in {"m.emote", "m.sticker"} and self._is_sender_authorized(
+            sender, chat_type=chat_type, chat_id=room_id,
+        ) is False:
+            return None
         relation = MatrixRelation.from_content(relates_to)
         thread_id = relation.thread_root
         if relation.thread_fallback_target:
-            body = _normalize_matrix_bang_command(_strip_reply_fallback(body))
+            body = _strip_reply_fallback(body)
+            if source_content.get("msgtype") not in {"m.emote", "m.sticker"}:
+                body = _normalize_matrix_bang_command(body)
         is_mentioned = mention_claimed or self._content_mentions_bot(body, source_content)
         if not is_dm:
             # Whitelist first: non-listed rooms are dropped even when @mentioned (DMs exempt).
@@ -2140,7 +2158,8 @@ class MatrixAdapter(MatrixContextMixin, BasePlatformAdapter):
             is_free_room = room_id in self._free_rooms
             in_bot_thread = bool(thread_id and thread_id in self._threads)
             if self._require_mention and not is_free_room and not in_bot_thread:
-                if not is_mentioned and not body.startswith("/"):
+                is_command = source_content.get("msgtype") not in {"m.emote", "m.sticker"} and body.startswith("/")
+                if not is_mentioned and not is_command:
                     if voice_gate is not None:  # parkable voice: a bare @mention may follow (Element X)
                         self._parked_voices.park(room_id, sender, voice_gate, event_id, source_content, relates_to)
                     logger.debug(
@@ -2298,7 +2317,12 @@ class MatrixAdapter(MatrixContextMixin, BasePlatformAdapter):
             extra["media_urls"] = [*(extra.get("media_urls") or []), reply.media_path]
             extra["media_types"] = [*(extra.get("media_types") or []), reply.media_type or "image/png"]
         media_msgtype = extra.pop("media_msgtype", None)
-        if media_msgtype is None:
+        if source_content.get("msgtype") == "m.emote":
+            body = _label_body("m.emote", body, sender)
+            extra["message_type"] = MessageType.TEXT
+        elif media_msgtype == "m.sticker":
+            body = _label_body("m.sticker", body, sender)
+        elif media_msgtype is None:
             # Re-normalize after reply stripping so ``> quoted\n\n!model`` is still a command.
             body = _normalize_matrix_bang_command(body)
             extra["message_type"] = MessageType.COMMAND if body.startswith("/") else MessageType.TEXT
@@ -2325,6 +2349,10 @@ class MatrixAdapter(MatrixContextMixin, BasePlatformAdapter):
             event._inbound_context_dependencies = (
                 MatrixTurnContext.capture(self, event, reply.parent or retained_parent),
             )
+        if source_content.get("msgtype") in {"m.emote", "m.sticker"}:
+            event.media_urls = event.media_urls or []
+            event.media_types = event.media_types or []
+            self._retain_rich_content(event, source_content, event_id, sender)
         return event
 
     def take_turn_channel_context(
@@ -2431,7 +2459,7 @@ class MatrixAdapter(MatrixContextMixin, BasePlatformAdapter):
             return
         if media_size_limit_exceeded:
             media_kind = {
-                "m.image": "image", "m.audio": "audio", "m.video": "video",
+                "m.image": "image", "m.audio": "audio", "m.video": "video", "m.sticker": "sticker",
             }.get(msgtype, "file")
             filename = declared_filename or (body if _is_bare_media_filename(msgtype, body) else "")
             marker = f"[matrix {media_kind} attachment too large"
@@ -2455,7 +2483,7 @@ class MatrixAdapter(MatrixContextMixin, BasePlatformAdapter):
             except Exception as e:
                 logger.warning("[Matrix] Failed to cache media: %s", e)
         # Unencrypted media may fall back to the HTTP download URL when caching failed.
-        http_url = self._mxc_to_http(url) if url and not is_encrypted_media else ""
+        http_url = self._mxc_to_http(url) if url and not is_encrypted_media and msgtype != "m.sticker" else ""
         media_urls = [cached_path] if cached_path else ([http_url] if http_url else None)
         msg_event = await self._build_inbound_event(
             room_id, sender, event_id, body, source_content, relates_to, ctx=ctx, message_type=msg_type,
@@ -2463,13 +2491,15 @@ class MatrixAdapter(MatrixContextMixin, BasePlatformAdapter):
             media_urls=media_urls, media_types=[media_type] if media_urls else None, media_msgtype=msgtype,
             metadata={"matrix_mention_claimed": True} if mention_claimed else {})
         if msg_event is not None:
+            if msgtype == "m.sticker" and not cached_path:
+                msg_event.text += "\n[matrix sticker image unavailable]"
             await self.handle_message(msg_event)
 
     @staticmethod
     def _classify_inbound_media(
             msgtype: str, event_mimetype: str, source_content: dict) -> tuple[MessageType, str, bool]:
         """Map a Matrix media msgtype to (MessageType, mime type, is_voice_message)."""
-        if msgtype == "m.image":
+        if msgtype in {"m.image", "m.sticker"}:
             return MessageType.PHOTO, event_mimetype or "image/png", False
         if msgtype == "m.audio":
             is_voice = has_voice_marker(source_content)
@@ -2485,8 +2515,10 @@ class MatrixAdapter(MatrixContextMixin, BasePlatformAdapter):
         file_bytes = await self._client.download_media(ContentURI(url))
         if file_bytes is None:
             return None
+        if len(file_bytes) > self._max_media_bytes:
+            logger.warning("[Matrix] Downloaded media exceeds the configured size limit for %s", event_id)
+            return None
         if encrypted_file is not None:
-            from mautrix.crypto.attachments import decrypt_attachment
             hashes_value, key_value = encrypted_file.get("hashes"), encrypted_file.get("key")
             hash_value = hashes_value.get("sha256") if isinstance(hashes_value, dict) else None
             key_value = key_value.get("k") if isinstance(key_value, dict) else key_value
@@ -2494,6 +2526,8 @@ class MatrixAdapter(MatrixContextMixin, BasePlatformAdapter):
             if not (key_value and hash_value and iv_value):
                 logger.warning("[Matrix] Encrypted media event missing decryption metadata for %s", event_id)
                 return None
+            from mautrix.crypto.attachments import decrypt_attachment
+
             file_bytes = decrypt_attachment(file_bytes, key_value, hash_value, iv_value)
         from gateway.platforms.base import (
             cache_audio_from_bytes_async,

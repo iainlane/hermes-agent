@@ -37,7 +37,7 @@ async def history_entry(client: Any, raw: dict, cache: MatrixEventContextCache, 
         cache.store(room_id, raw["event_id"], MatrixEventContext(
             str(raw.get("sender") or ""), "[redacted]", redacted=True,
         ))
-    if raw.get("type", "m.room.message") not in {"m.room.message", "m.room.encrypted"}:
+    if raw.get("type", "m.room.message") not in {"m.room.message", "m.room.encrypted", "m.sticker"}:
         return None
     if MatrixRelation.from_content(event_content(raw).get("m.relates_to")).is_edit:
         return None
@@ -58,12 +58,12 @@ async def history_entry(client: Any, raw: dict, cache: MatrixEventContextCache, 
     if not isinstance(body, str):
         return None
     body = body.strip()
-    text = _label_body(str(content.get("msgtype") or ""), _own_text(body))
+    text = _label_body(str(content.get("msgtype") or ""), _own_text(body), str(raw.get("sender") or ""))
     if not text:
         return None
     sender = str(raw.get("sender") or "")
     return MatrixEventContext(
-        sender, text, is_image=content.get("msgtype") == "m.image",
+        sender, text, is_image=content.get("msgtype") in {"m.image", "m.sticker"},
         media_content=MatrixEventContext.image_content(content),
         state_error=state.error["error"] if state.error else None,
         replacement_id=state.replacement_id,
