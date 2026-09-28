@@ -1,11 +1,13 @@
 """Post-turn pending input selection for GatewayRunner."""
 
 import asyncio
+import dataclasses
 import logging
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from gateway.session import SessionSource
+from gateway.platforms.event import MessageEvent, MessageType
 from gateway.platforms.base_pending import reserve_pending_dispatch, release_pending_dispatch, release_pending_dispatch_record, pending_dispatch_withdrawn
 
 if TYPE_CHECKING:
@@ -23,7 +25,8 @@ class GatewayPendingDrainMixin:
 
 
     async def _run_agent_drain_pending(
-        self, result: Any, adapter: Any, source: SessionSource, session_key: Optional[str]
+        self, result: Any, adapter: Any, source: SessionSource, session_key: Optional[str],
+        processing_event: Optional[MessageEvent] = None,
     ) -> tuple[Any, Optional[str]]:
         """Dequeue the adapter's pending / interrupt / leftover-steer follow-up as ``(pending_event, pending)``.
 
@@ -32,6 +35,7 @@ class GatewayPendingDrainMixin:
         from gateway.run import _dequeue_pending_event, _is_control_interrupt_message
         pending_event = None
         pending = None
+        pending_input = None
         if result and adapter and session_key:
             live_adapter = self._delivery_adapter_for(source)
             if (live_adapter is not None and live_adapter is not adapter
@@ -102,8 +106,12 @@ class GatewayPendingDrainMixin:
         if leftover_steer:
             if not pending and not pending_event:
                 pending = leftover_steer
+                if processing_event is not None:
+                    pending_input = processing_event._processing_state.take_pending_input()
+                    if pending_input is not None:
+                        pending_event = dataclasses.replace(pending_input, text=pending, message_type=MessageType.TEXT)
                 logger.debug("Delivering leftover /steer as next turn: '%s...'", pending[:40])
-            elif pending_event and adapter and session_key:
+            elif pending_event and adapter and session_key and pending_input is None:
                 # User steered during the turn, but a background event or queued message arrived.
                 # Deliver the user's steer first and restore the pending event to the head of the queue.
                 overflow = self._overflow_queue(session_key)
