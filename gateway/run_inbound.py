@@ -39,7 +39,7 @@ from gateway.session import (
 from gateway.turn_lease import TurnLeaseTimeoutError
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-if TYPE_CHECKING:  # string annotations only; never imported at runtime (cycle)
+if TYPE_CHECKING:  # Never import the runner at runtime (cycle).
     from gateway.run import GatewayRunner
     from gateway.run_turn_runner import TurnRunner
     from gateway.session_state import SessionState
@@ -73,6 +73,9 @@ class GatewayInboundMixin(GatewayPluginInjectionMixin):
     """Inbound message pipeline (_handle_message, text/media preparation, durable-turn markers, plugin injection) for GatewayRunner."""
 
     _peek_session_state: Callable[[str], Optional[SessionState]]
+
+    if TYPE_CHECKING:
+        _queue_or_replace_pending_event = GatewayRunner._queue_or_replace_pending_event
 
     async def _hm_pre_gateway_dispatch_hook(
         self, event: MessageEvent, source: SessionSource
@@ -704,6 +707,10 @@ class GatewayInboundMixin(GatewayPluginInjectionMixin):
         if _handled:
             return _result
         if not await self._strict_session_current(event, _quick_key):
+            return None
+
+        if event.internal or event.defer_until_idle:
+            self._queue_or_replace_pending_event(_quick_key, event)
             return None
 
         effective_busy_input_mode = self._effective_busy_input_mode(source)
