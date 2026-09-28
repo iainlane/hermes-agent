@@ -546,8 +546,14 @@ def _gateway_ready(log: str, room_id: str) -> bool:
 
 
 @pytest.fixture
-def gateway_config() -> str:
-    return "platforms:\n  matrix:\n    enabled: true\nupdates:\n  check: false\n"
+def gateway_script() -> list[Response] | None:
+    return None
+
+
+@pytest.fixture
+def gateway_config(live_room: LiveRoom) -> str:
+    return ("platforms:\n  matrix:\n    enabled: true\n"
+            f"    allowed_users: '{live_room.observer.user_id}'\nupdates:\n  check: false\n")
 
 
 @pytest.fixture
@@ -599,6 +605,7 @@ def gateway(
     gateway_config: str,
     gateway_home_setup: Callable[[Path], None],
     model_responder: Responder | None,
+    gateway_script: list[Response] | None,
     matrix_feedback: MatrixFeedbackSettings,
     gateway_busy_input_mode: str | None,
     gateway_delivery_probe: GatewayDeliveryProbe | None,
@@ -613,7 +620,7 @@ def gateway(
     native_images = mode in {"pause-image-context", "pause-image-conversion", "image-packs"}
     home = gateway_home
     route = _host_route(network)
-    script: list[Response] | Responder | None = model_responder
+    script: list[Response] | Responder | None = model_responder if model_responder is not None else gateway_script
     if script is None:
         script = [] if mode == "inspection" else [Text(settings.reply)]
     if settings.reply_to_mode is not None:
@@ -668,7 +675,6 @@ def gateway(
             stream.write(
                 "MATRIX_HOMESERVER=http://synapse:8008\n"
                 f"MATRIX_ACCESS_TOKEN={live_room.bot.access_token}\n"
-                f"MATRIX_ALLOWED_USERS={live_room.observer.user_id}\n"
                 f"MATRIX_HOME_ROOM={room_id}\n"
                 "MATRIX_E2EE_MODE=optional\nMATRIX_AUTO_THREAD=false\n"
             )

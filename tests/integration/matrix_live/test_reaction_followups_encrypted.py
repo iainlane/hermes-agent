@@ -21,11 +21,13 @@ from tests.integration.matrix_live.live_gateway import LiveGateway
 
 
 @pytest.fixture
-def gateway_config() -> str:
+def gateway_config(live_room: LiveRoom) -> str:
     # The client's reply deadline spans a restart. A delivered restart notice is one more
     # encrypted send inside that window, and this case does not test notices.
     return (
-        "platforms:\n  matrix:\n    enabled: true\n    max_message_length: 500\n"
+        "platforms:\n  matrix:\n    enabled: true\n"
+        f"    allowed_users: '{live_room.observer.user_id}'\n"
+        "    max_message_length: 500\n"
         "    gateway_restart_notification: false\n"
         "streaming:\n  enabled: false\nupdates:\n  check: false\n"
         "plugins:\n  enabled: [matrix-restart-barriers]\n"
