@@ -51,6 +51,7 @@ if TYPE_CHECKING:
     from plugins.platforms.matrix.room_context import MatrixRoomIdentity
 
 from agent.i18n import t
+from hermes_constants import get_hermes_home
 from gateway.platforms._shared import (
     apply_yaml_bridge as _apply_yaml_bridge, extra_or_secret as _extra_or_secret,
     get_scoped_secret as _get_scoped_secret
@@ -134,11 +135,27 @@ from plugins.platforms.matrix.inbound_events import MatrixInboundEventMixin
 from plugins.platforms.matrix.edit_followups import MatrixEditFollowupsMixin, edit_followup_rooms
 from plugins.platforms.matrix.turn_context import MatrixTurnContextUpdate
 from plugins.platforms.matrix.reply_context import (
-    MatrixEventContext, MatrixEventContextCache, MatrixReplyContext, extract_mx_reply_quote, _label_body,
-    _MATRIX_REPLY_FALLBACK_PILL_RE, _has_reply_fallback, _split_reply_fallback,
+    MatrixEventContext,
+    MatrixEventContextCache,
+    MatrixReplyContext,
+    extract_mx_reply_quote,
+    _label_body,
+    _MATRIX_REPLY_FALLBACK_PILL_RE,
+    _has_reply_fallback,
+    _split_reply_fallback,
 )
-from plugins.platforms.matrix.thread_context import NON_CONVERSATIONAL_KEY, PreviousTurnCheck, fetch_thread_entries
-from plugins.platforms.matrix.read_context import SessionAccess, check_session_access, read_matrix_context
+from plugins.platforms.matrix.thread_context import (
+    NON_CONVERSATIONAL_KEY,
+    PreviousTurnCheck,
+    fetch_thread_entries,
+)
+from plugins.platforms.matrix.read_context import (
+    MatrixSessionAccess,
+    SessionAccess,
+    check_session_access,
+    read_matrix_context,
+)
+from plugins.platforms.matrix.thread_create import MatrixThreadCreateMixin
 from plugins.platforms.matrix.sync_transport import (
     DurableSyncStore, SyncCheckpoints, SyncDispatch, create_sync_client, create_sync_olm_machine,
     is_invalid_sync_cursor,
@@ -715,7 +732,7 @@ from plugins.platforms.matrix.delivery import MatrixDeliveryMixin
 from plugins.platforms.matrix.feedback import MatrixFeedbackMixin
 
 
-class MatrixAdapter(MatrixApprovalMixin, MatrixReactionPromptMixin, MatrixRTCVoiceMixin, MatrixRTCOutboundMixin, MatrixEditFollowupsMixin, MatrixFeedbackMixin, MatrixDeliveryMixin, MatrixInboundEventMixin, MatrixMediaMixin, MatrixInvitesMixin, MatrixPendingReplayMixin, MatrixIntakeMixin, MatrixRedactionMixin, MatrixFollowupMixin, MatrixRichContentMixin, MatrixContextMixin, BasePlatformAdapter):
+class MatrixAdapter(MatrixThreadCreateMixin, MatrixApprovalMixin, MatrixReactionPromptMixin, MatrixRTCVoiceMixin, MatrixRTCOutboundMixin, MatrixEditFollowupsMixin, MatrixFeedbackMixin, MatrixDeliveryMixin, MatrixInboundEventMixin, MatrixMediaMixin, MatrixInvitesMixin, MatrixPendingReplayMixin, MatrixIntakeMixin, MatrixRedactionMixin, MatrixFollowupMixin, MatrixRichContentMixin, MatrixContextMixin, BasePlatformAdapter):
     """Gateway adapter for Matrix (any homeserver)."""
 
     supports_code_blocks = True  # Matrix renders fenced code blocks (HTML/markdown)
@@ -811,6 +828,7 @@ class MatrixAdapter(MatrixApprovalMixin, MatrixReactionPromptMixin, MatrixRTCVoi
         self._processed_events: deque = deque(maxlen=1000)  # event dedup, newest kept
         self._processed_events_set: set = set()
         self._threads = ThreadParticipationTracker("matrix")  # require_mention bypass
+        self._thread_home = get_hermes_home()
         self._parked_voices = ParkedVoices()  # unmentioned voice awaiting a bare @mention
         self._require_mention: bool = self._parse_require_mention(config)
         self._thread_require_mention: bool = self._parse_thread_require_mention(config)
@@ -1364,11 +1382,18 @@ class MatrixAdapter(MatrixApprovalMixin, MatrixReactionPromptMixin, MatrixRTCVoi
 
     async def _send_room_message(
         self, chat_id: str, msg_content: Dict[str, Any], *, finalize: bool = True, notice: bool = False,
+        access: MatrixSessionAccess | None = None, before_request: Callable[[], None] | None = None,
     ) -> str:
         """Send one m.room.message event (45s cap) and return its event ID as str."""
-        event_id = await asyncio.wait_for(
-            self._client.send_message_event(RoomID(chat_id), EventType.ROOM_MESSAGE, msg_content), timeout=45)
+        if access is not None:
+            access.check()
+        client = access.client if access is not None else self._client
+        delivery = access.send_message(msg_content, before_request=before_request) if access is not None else client.send_message_event(
+            RoomID(chat_id), EventType.ROOM_MESSAGE, msg_content)
+        event_id = await asyncio.wait_for(delivery, timeout=45)
         event_id = str(event_id)
+        if access is not None:
+            access.check(event_id)
         self._event_context_cache.store(
             chat_id, event_id, MatrixEventContext(self._user_id or "", msg_content["body"])
         )

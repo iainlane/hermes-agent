@@ -618,6 +618,14 @@ The `matrix_read` tool, in the `matrix_read` toolset, reads recent messages in t
 
 The `matrix_image_packs` toolset lists and sends image-pack stickers, as described in the Image-pack stickers section below.
 
+
+
+`matrix_thread_create` explicitly creates a thread in the current room. Supply visible root text for a new main-timeline message, or an existing main-timeline event ID, plus the first thread message. Matrix has no separate thread name: a supplied label is part of the visible root text. Thread replies, edits and withdrawn events cannot become roots. The action does not join or create rooms.
+
+Success includes the room, root and initial reply event IDs. If the root was delivered but the first reply failed, the result reports partial delivery and the root ID for recovery. A root alone does not create a visible thread. Encryption and homeserver permission failures are reported without a plaintext retry. The current turn stays in its original session; a later user reply in the new thread starts a separate thread conversation.
+
+Both toolsets are enabled for Matrix sessions. Turn either off in the Matrix checklist of `hermes tools`, or run `hermes tools disable matrix_read --platform matrix` or `hermes tools disable matrix_threads --platform matrix`. A saved Matrix toolset list that names individual toolsets and was saved before a toolset existed does not include it; run `hermes tools enable <toolset> --platform matrix` to add it.
+
 The `matrix_reaction` tool, in the `matrix_reaction` toolset, adds an emoji reaction to a message or removes the reactions that the agent added. A reaction targets the current inbound message unless the agent supplies a Matrix event ID. The gateway records agent reactions in memory for the 1,000 most recently used messages, so the agent can remove only reactions that it added since the gateway process started. `MATRIX_REACTIONS=false` disables automatic processing reactions but does not block an agent-requested reaction.
 
 The read and reaction tools operate in the current room. Each call checks that the room is joined and allowed and that the user who sent the current message passes the Matrix user policy.

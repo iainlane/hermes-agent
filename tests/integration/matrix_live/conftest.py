@@ -418,7 +418,7 @@ async def _register(url: str, localpart: str, *, unique: bool = False) -> Matrix
 
 
 def _create_live_room(
-    synapse: tuple[DockerContainer, str, Network], *, unique_accounts: bool = False, matrix_room_topic: str | None = None,
+    synapse: tuple[DockerContainer, str, Network], *, unique_accounts: bool = False, matrix_room_topic: str | None = None, group: bool = False,
 ) -> LiveRoom:
     _, url, _ = synapse
 
@@ -436,6 +436,16 @@ def _create_live_room(
                     response.room_id, "m.room.topic", {"topic": matrix_room_topic}
                 )
                 assert isinstance(topic_response, RoomPutStateResponse), topic_response
+            if group:
+                spectator = await _register(url, "spectator")
+                await client.room_invite(response.room_id, spectator.user_id)
+                spectator_client = spectator.client(url)
+                try:
+                    from nio import JoinResponse
+                    joined = await spectator_client.join(response.room_id)
+                    assert isinstance(joined, JoinResponse), joined
+                finally:
+                    await spectator_client.close()
             return LiveRoom(url, response.room_id, bot, alice)
         finally:
             await client.close()
@@ -449,8 +459,8 @@ def matrix_room_topic() -> str | None:
 
 
 @pytest.fixture
-def live_room(synapse: tuple[DockerContainer, str, Network], matrix_room_topic: str | None) -> LiveRoom:
-    return _create_live_room(synapse, matrix_room_topic=matrix_room_topic)
+def live_room(synapse: tuple[DockerContainer, str, Network], matrix_room_topic: str | None, request: pytest.FixtureRequest) -> LiveRoom:
+    return _create_live_room(synapse, matrix_room_topic=matrix_room_topic, group=getattr(request, "param", None) == "group")
 
 
 @pytest.fixture
@@ -639,6 +649,7 @@ def gateway(
                 + f"  busy_input_mode: {gateway_busy_input_mode or ('queue' if mode == 'pause-queued-context' else 'interrupt')}\n"
                 + f"  busy_text_mode: {'queue' if mode == 'pause-queued-context' else 'interrupt'}\n"
                 + ("  busy_ack_enabled: false\n" if mode == "pause-queued-context" else "")
+                + "  platforms:\n    matrix:\n      tool_progress: \"off\"\n"
                 + "approvals:\n  mode: manual\n  timeout: 15\n"
                 + gateway_extra_config
                 + gateway_auxiliary_config
