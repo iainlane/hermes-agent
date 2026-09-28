@@ -15,7 +15,7 @@ from gateway.platforms.event import MessageEvent, MessageType
 from plugins.platforms.matrix.location import format_location_content
 from plugins.platforms.matrix.relations import MatrixRelation
 from plugins.platforms.matrix.adapter_feedback import ReadReceiptMode
-from plugins.platforms.matrix.reply_context import MatrixEventContext, MatrixEventContextCache
+from plugins.platforms.matrix.reply_context import MatrixEventContext, MatrixEventContextCache, _split_reply_fallback
 from plugins.platforms.matrix.sync_transport import (
     DurableSyncStore, SyncCheckpoints, SyncDispatch, create_sync_client, is_invalid_sync_cursor,
 )
@@ -85,14 +85,15 @@ class MatrixIntakeMixin(BasePlatformAdapter):
     async def _handle_text_message(
         self, room_id: str, sender: str, event_id: str, event_ts: float, source_content: dict,
         relates_to: dict, *, reply_parent: MatrixEventContext | None = None) -> asyncio.Future[bool] | bool | None:
-        from plugins.platforms.matrix.adapter import _normalize_matrix_bang_command, _strip_reply_fallback
+        from plugins.platforms.matrix.adapter import _normalize_matrix_bang_command
 
         body = source_content.get("body", "") or ""
         location_text = None
         if source_content.get("msgtype") == "m.location":
             location_content = source_content
             if relates_to.get("m.in_reply_to") and isinstance(body, str):
-                location_content = {**source_content, "body": _strip_reply_fallback(body)}
+                _, location_body = _split_reply_fallback(body)
+                location_content = {**source_content, "body": location_body}
             location_text = format_location_content(location_content)
             if location_text is None:
                 return
