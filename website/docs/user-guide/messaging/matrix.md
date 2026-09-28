@@ -484,13 +484,22 @@ When E2EE is enabled, Hermes:
 
 ### Matrix Tools and Controls
 
-The `matrix_read` tool, in the `matrix_read` toolset, reads recent messages in the current room, one thread, or one event, and returns at most 50 events. Each call checks that the room is joined and allowed and that the user who sent the current message passes the Matrix user policy. Encrypted events are decrypted with the gateway's Matrix session. Each message in the result lists its reactions with their sender and target event.
+The `matrix_read` tool, in the `matrix_read` toolset, reads recent messages in the current room, one thread, or one event, and returns at most 50 events. It also reads the current room's state, joined members, permissions and pins. Each call checks that the room is joined and allowed and that the user who sent the current message passes the Matrix user policy. Encrypted events are decrypted with the gateway's Matrix session. Each message in the result lists its reactions with their sender and target event.
 
 The `matrix_image_packs` toolset lists and sends image-pack stickers, as described in the Image-pack stickers section below.
 
 The `matrix_reaction` tool, in the `matrix_reaction` toolset, adds an emoji reaction to a message or removes the reactions that the agent added. A reaction targets the current inbound message unless the agent supplies a Matrix event ID. The gateway records agent reactions in memory for the 1,000 most recently used messages, so the agent can remove only reactions that it added since the gateway process started. `MATRIX_REACTIONS=false` disables automatic processing reactions but does not block an agent-requested reaction.
 
 The read and reaction tools operate in the current room. Each call checks that the room is joined and allowed and that the user who sent the current message passes the Matrix user policy.
+
+The agent can also list joined rooms and joined Spaces, or search the homeserver's
+user directory. Discovery applies the configured room and requester policy
+and never joins rooms. It lists a room or Space only if the requesting user
+has joined it. The directory search runs as the bot account. Hermes returns
+only the matching users who share at least one joined room with the
+requester, so the results do not reveal which other users the bot can see.
+Each discovery request examines at most 50 of the bot's joined rooms, and
+results report truncation and errors.
 
 `matrix_followup` can enable one reaction-triggered follow-up for the current turn. The agent can restrict it to specific emoji. For ten minutes after the final reply is delivered, a new matching reaction from the requester to any part of that reply starts one follow-up turn in the same room and thread. The action is disabled by default, and the last call in the turn decides its setting.
 

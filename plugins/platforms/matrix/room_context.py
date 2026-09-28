@@ -276,3 +276,4 @@ class MatrixRoomIdentity:
     has_explicit_name: bool
     chat_type: str
     conflict: bool = False
+    joined_members: frozenset[str] | None = None

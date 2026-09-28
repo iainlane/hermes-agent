@@ -20,6 +20,7 @@ REQUESTER = "@alice:server"
 
 def _matrix_adapter(*, allowed_rooms=(), authorized=True) -> MatrixAdapter:
     adapter = object.__new__(MatrixAdapter)
+    adapter._client = SimpleNamespace()
     adapter._reactions_enabled = False
     adapter._pending_reactions = {}
     adapter._agent_reactions = {(ROOM, "$current"): ["$earlier"]}
