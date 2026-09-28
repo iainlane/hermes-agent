@@ -83,9 +83,6 @@ class TestStartupPlatformIsolation:
     @pytest.mark.asyncio
     async def test_start_continues_after_platform_connect_timeout(self, tmp_path, monkeypatch):
         """A timeout on Telegram should queue it and still connect Feishu."""
-        # Skip the boot warm-up and boot-path sends: unrelated to platform
-        # isolation, and with create_task stubbed below the bounded wait on
-        # the (never-started) send task would hold start() for 30 s.
         monkeypatch.setenv("HERMES_STARTUP_WARMUP_TIMEOUT", "0")
         runner = _make_runner()
         runner._await_startup_boot_sends = AsyncMock()
@@ -120,9 +117,8 @@ class TestStartupPlatformIsolation:
             ]
         )
 
-        def fake_create_task(coro):
-            coro.close()
-            return MagicMock()
+        runner._start_finish_wiring = AsyncMock()
+        runner._start_spawn_background_watchers = MagicMock()
 
         with patch("gateway.status.publish_runtime_status"):
             with patch("hermes_cli.plugins.discover_plugins"):
@@ -136,8 +132,7 @@ class TestStartupPlatformIsolation:
                                 "gateway.channel_directory.build_channel_directory",
                                 new=AsyncMock(return_value={"platforms": {}}),
                             ):
-                                with patch("gateway.run.asyncio.create_task", side_effect=fake_create_task):
-                                    assert await runner.start() is True
+                                assert await runner.start() is True
 
         assert Platform.TELEGRAM in runner._failed_platforms
         assert Platform.FEISHU in runner.adapters
@@ -714,13 +709,12 @@ class TestVoiceInputCallbackWiring:
         """Cold-start connect must wire _voice_input_callback on Discord adapter."""
         monkeypatch.setenv("HERMES_STARTUP_WARMUP_TIMEOUT", "0")
         runner = self._make_runner_with_discord()
-        runner._await_startup_boot_sends = AsyncMock()  # see TestStartupPlatformIsolation
+        runner._await_startup_boot_sends = AsyncMock()
         adapter = self._make_discord_voice_adapter()
         runner.config.sessions_dir = tmp_path
 
-        def fake_create_task(coro):
-            coro.close()
-            return MagicMock()
+        runner._start_finish_wiring = AsyncMock()
+        runner._start_spawn_background_watchers = MagicMock()
 
         with patch.object(runner, "_create_adapter", return_value=adapter):
             with patch("gateway.status.publish_runtime_status"):
@@ -735,11 +729,7 @@ class TestVoiceInputCallbackWiring:
                                     "gateway.channel_directory.build_channel_directory",
                                     new=AsyncMock(return_value={"platforms": {}}),
                                 ):
-                                    with patch(
-                                        "gateway.run.asyncio.create_task",
-                                        side_effect=fake_create_task,
-                                    ):
-                                        assert await runner.start() is True
+                                    assert await runner.start() is True
 
         assert adapter._voice_input_callback is not None, (
             "startup must wire _voice_input_callback"
