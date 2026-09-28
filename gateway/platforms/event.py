@@ -64,6 +64,13 @@ class _ProcessingCompletion:
 
 
 @dataclass
+class _VoicePreparation:
+    text: Optional[str] = None
+    transcripts: List[str] = field(default_factory=list)
+    echoed: int = 0
+
+
+@dataclass
 class _ProcessingState:
     phase: _ProcessingPhase = _ProcessingPhase.PENDING
     outcome: Optional[ProcessingOutcome] = None
@@ -174,6 +181,7 @@ class MessageEvent:
     reply_expected: Optional[bool] = None
     # dataclasses.replace shares this mutable state with the adapter's original event.
     _processing_state: _ProcessingState = field(default_factory=_ProcessingState, repr=False, compare=False)
+    _voice_preparation: _VoicePreparation = field(default_factory=_VoicePreparation, repr=False, compare=False)
 
     # Process-local admission receipt, never routing metadata or execution acknowledgement.
     _gateway_accepted: bool = field(default=False, init=False, repr=False, compare=False)

@@ -62,6 +62,78 @@ class MatrixFeedbackSettings:
 
 
 @dataclass(frozen=True)
+class GatewayDeliveryProbe:
+    home: Path
+
+    @property
+    def started(self) -> Path:
+        return self.home / "delivery-started"
+
+    @property
+    def release(self) -> Path:
+        return self.home / "delivery-release"
+
+    @property
+    def transcriptions(self) -> Path:
+        return self.home / "transcriptions"
+
+
+_GATEWAY_DELIVERY_PROBE = """
+import asyncio
+import sys
+from pathlib import Path
+from gateway.platforms.base import BasePlatformAdapter
+from tools import transcription_tools
+
+home = Path("/opt/data")
+original_init = BasePlatformAdapter.__init__
+
+def observed_init(self, *args, **kwargs):
+    original_init(self, *args, **kwargs)
+    if self.platform.value != "matrix":
+        return
+    original_send = self.send
+
+    async def gated_send(chat_id, content, reply_to=None, metadata=None):
+        if content.startswith("Completed Matrix turn 1"):
+            (home / "delivery-started").touch()
+            async with asyncio.timeout(15):
+                while not (home / "delivery-release").exists():
+                    await asyncio.sleep(0.01)
+        return await original_send(chat_id, content, reply_to=reply_to, metadata=metadata)
+
+    self.send = gated_send
+
+def transcribe_audio(path, *args):
+    with (home / "transcriptions").open("a", encoding="utf-8") as stream:
+        stream.write(str(path) + "\\n")
+    return {"success": True, "transcript": "Voice correction [in:delivery-voice]"}
+
+BasePlatformAdapter.__init__ = observed_init
+transcription_tools.transcribe_audio = transcribe_audio
+sys.argv = ["hermes", "gateway", "run"]
+from hermes_cli.main import main
+main()
+"""
+
+
+@pytest.fixture
+def gateway_delivery_probe(
+    request: pytest.FixtureRequest, tmp_path: Path
+) -> Iterator[GatewayDeliveryProbe | None]:
+    probe = (
+        GatewayDeliveryProbe(tmp_path / "hermes")
+        if getattr(request, "param", False)
+        else None
+    )
+    try:
+        yield probe
+    finally:
+        if probe is not None and probe.home.exists():
+            probe.release.touch()
+
+
+@dataclass(frozen=True)
 class LinuxNioObserver:
     container: DockerContainer
     account: MatrixAccount
@@ -283,6 +355,7 @@ def gateway(
     model_responder: Callable[[dict], Text],
     matrix_feedback: MatrixFeedbackSettings,
     gateway_busy_input_mode: str,
+    gateway_delivery_probe: GatewayDeliveryProbe | None,
 ) -> Iterator[LiveGateway]:
     _, _, network = synapse
     room_id = live_room.room_id
@@ -311,6 +384,11 @@ def gateway(
             )
         home.chmod(0o777)
 
+        command = (
+            ["-c", _GATEWAY_DELIVERY_PROBE]
+            if gateway_delivery_probe is not None
+            else ["-m", "hermes_cli.main", "gateway", "run"]
+        )
         with DockerContainer(
             gateway_image,
             network=network,
@@ -318,7 +396,7 @@ def gateway(
             user="10000:10000",
             working_dir="/opt/hermes",
             extra_hosts={"host.docker.internal": "host-gateway"},
-        ).with_command("-m hermes_cli.main gateway run").with_volume_mapping(home, "/opt/data", "rw") as container:
+        ).with_command(command).with_volume_mapping(home, "/opt/data", "rw") as container:
             def connected() -> bool:
                 output = container.get_wrapped_container().logs().decode(errors="replace")
                 gateway_log = home / "logs" / "gateway.log"

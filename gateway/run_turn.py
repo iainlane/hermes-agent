@@ -3702,10 +3702,17 @@ class GatewayTurnMixin:
 
         # Leftover /steer (arrived after the last tool batch): deliver as the next user turn.
         if pending_steer:
-            steer_event = (
-                dataclasses.replace(pending_input, text=pending_steer, message_type=MessageType.TEXT)
-                if pending_input is not None else None
-            )
+            steer_event = None
+            if pending_input is not None:
+                prepared = pending_input._voice_preparation
+                steer_event = dataclasses.replace(
+                    pending_input, text=pending_steer,
+                    message_type=pending_input.message_type if pending_input.media_urls else MessageType.TEXT,
+                    _voice_preparation=(
+                        dataclasses.replace(prepared, text=pending_steer)
+                        if prepared.text is not None else prepared
+                    ),
+                )
             if pending or pending_event:
                 if adapter and session_key:
                     self._enqueue_fifo(
