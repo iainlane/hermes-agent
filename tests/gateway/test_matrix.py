@@ -1131,7 +1131,7 @@ async def test_room_state_note_reaches_queued_model_turn():
     turn_ctx = types.SimpleNamespace(
         source=pending.source, session_id="sid", session_key="matrix-room", run_generation=1,
         _interrupt_depth=0, history=[], _status_thread_metadata=None, context_prompt=None,
-        result_holder=[None],
+        result_holder=[None], processing_event=None,
     )
 
     await GatewayRunner._run_agent_queued_followup(
