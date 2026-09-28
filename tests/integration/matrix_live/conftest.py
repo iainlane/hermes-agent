@@ -264,6 +264,7 @@ def gateway(
     _, _, network = synapse
     room_id = live_room.room_id
     mode = getattr(request, "param", None)
+    resolution_pause = mode == "pause-resolution"
     context_pause = mode in {"pause-context", "pause-image-context", "pause-image-conversion", "pause-queued-context"}
     native_images = mode in {"pause-image-context", "pause-image-conversion"}
     home = tmp_path / "hermes"
@@ -275,7 +276,8 @@ def gateway(
             extra_config=(
                 ("  image_input_mode: native\n" if native_images else "")
                 + "platforms:\n  matrix:\n    enabled: true\n"
-                + ("    thread_require_mention: true\n" if mode == "pause-context" else "")
+                + ("    thread_require_mention: true\n" if mode == "pause-context" or resolution_pause else "")
+                + (f"    free_response_rooms:\n      - {room_id!r}\n" if resolution_pause else "")
                 + "updates:\n  check: false\n"
                 + ("auxiliary:\n  background_review:\n    enabled: false\n  title_generation:\n    model_upgrade_enabled: false\n"
                    if mode == "pause-image-context" else "")
@@ -283,6 +285,7 @@ def gateway(
                    if mode == "pause-queued-context" else "")
                 + ("plugins:\n  enabled:\n    - matrix-live-context\n"
                    if context_pause else "")
+                + ("plugins:\n  enabled:\n    - matrix-live-resolution\n" if resolution_pause else "")
             ),
         )
         if native_images:
@@ -406,6 +409,17 @@ def gateway(
                     "    return original_read_bytes(path)\n"
                     "Path.read_bytes = paused_read_bytes\n"
                 )
+        if resolution_pause:
+            plugin = home / "plugins" / "matrix-live-resolution"
+            plugin.mkdir(parents=True)
+            (plugin / "plugin.yaml").write_text(
+                "name: matrix-live-resolution\nversion: 1.0.0\ndescription: Matrix live resolution barrier\n",
+                encoding="utf-8",
+            )
+            (plugin / "__init__.py").write_text(
+                (Path(__file__).parent / "resolution_probe.py").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
         home.chmod(0o777)
 
         with DockerContainer(
