@@ -616,6 +616,9 @@ When E2EE is enabled, Hermes:
 
 The `matrix_read` tool, in the `matrix_read` toolset, reads recent messages in the current room, one thread, or one event, and returns at most 50 events. It also reads the current room's state, joined members, permissions and pins. Each call checks that the room is joined and allowed and that the user who sent the current message passes the Matrix user policy. Encrypted events are decrypted with the gateway's Matrix session. Each message in the result lists its reactions with their sender and target event.
 
+The adapter uses reactions and redactions for approval prompts and pickers.
+Optional reaction menus give the agent a structured way to offer choices.
+
 The `matrix_image_packs` toolset lists and sends image-pack stickers, as described in the Image-pack stickers section below.
 
 
@@ -747,6 +750,24 @@ existed does not include it; run
 `hermes tools enable matrix_image_packs --platform matrix` to add it.
 
 [image-packs-msc]: https://github.com/matrix-org/matrix-spec-proposals/blob/0923024fe35068874e59b5536b793dfcfcfc96c0/proposals/2545-emotes.md
+
+#### Agent reaction menus
+
+Enable **Reaction Menus** through `hermes tools`, or add `reaction_menu` to
+`platform_toolsets.matrix` in `config.yaml`. The toolset is disabled by default
+and is available only in Matrix sessions. Restart the gateway or start a new
+session after changing toolsets.
+
+The agent can call `present_menu` with a question and one to five choices. Each
+choice has a distinct emoji, visible label and payload for the next turn. The
+menu arrives in the current room or thread. Only the person who requested the
+menu can select a choice, and that person must still pass the gateway's user
+policy. The first valid selection starts one follow-up in the original session.
+
+Menus expire after five minutes. A new menu replaces the previous menu in the
+same session. Menus are local to the running gateway and disappear on restart;
+ask the agent for another menu if a choice is no longer active. Approval and
+picker controls are processed before menu selections.
 
 ### Media Limits
 
