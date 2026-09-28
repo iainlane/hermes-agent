@@ -161,7 +161,8 @@ class MatrixContextMixin:
         return None
 
     async def _get_room_members(
-        self: MatrixAdapter, room_id: str, *, owner: RoomClientScope | None = None,
+        self: MatrixAdapter, room_id: str, *, force_refresh: bool = False,
+        owner: RoomClientScope | None = None,
     ) -> Optional[set[str]]:
         """Read the complete joined member list from the store or homeserver."""
         from plugins.platforms.matrix.adapter import RoomID, Membership
@@ -173,7 +174,7 @@ class MatrixContextMixin:
             return None
 
         state_store = getattr(client, "state_store", None)
-        if state_store is not None:
+        if state_store is not None and not force_refresh:
             with suppress(Exception):
                 full_list = await state_store.has_full_member_list(RoomID(room_id))
                 owner.check()
@@ -278,9 +279,10 @@ class MatrixContextMixin:
         return event
 
     async def _read_room_member_profiles(
-        self: MatrixAdapter, room_id: str, *, owner: RoomClientScope | None = None,
+        self: MatrixAdapter, room_id: str, *, force_refresh: bool = False,
+        owner: RoomClientScope | None = None,
     ) -> tuple[Optional[set[str]], Optional[Dict[Any, Any]]]:
-        members = await self._get_room_members(room_id, owner=owner)
+        members = await self._get_room_members(room_id, force_refresh=force_refresh, owner=owner)
         profiles = await self._get_room_member_profiles(room_id, owner=owner) if members is not None else None
         return members, profiles
 
@@ -337,7 +339,7 @@ class MatrixContextMixin:
                     "m.room.history_visibility", "m.room.encryption", "m.room.tombstone",
                 )
             ),
-            self._read_room_member_profiles(room_id, owner=owner),
+            self._read_room_member_profiles(room_id, force_refresh=force_refresh, owner=owner),
             return_exceptions=True,
         )
         owner.check()
