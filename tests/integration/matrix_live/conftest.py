@@ -457,6 +457,11 @@ def gateway_extra_config() -> str:
 
 
 @pytest.fixture
+def gateway_auxiliary_config() -> str:
+    return ""
+
+
+@pytest.fixture
 def gateway_home(tmp_path: Path) -> Path:
     home = tmp_path / "hermes"
     home.mkdir()
@@ -473,6 +478,7 @@ def gateway(
     live_room: LiveRoom,
     gateway_config: str,
     gateway_home_setup: Callable[[Path], None],
+    gateway_auxiliary_config: str,
 ) -> Iterator[LiveGateway]:
     param = getattr(request, "param", GatewaySettings())
     settings = GatewaySettings(mode=param) if isinstance(param, str) else param
@@ -508,6 +514,7 @@ def gateway(
                    if context_pause else "")
                 + ("plugins:\n  enabled:\n    - matrix-live-resolution\n" if resolution_pause else "")
                 + gateway_extra_config
+                + gateway_auxiliary_config
                 + ("plugins:\n  enabled:\n    - matrix-live-discovery\n" if mode == "discovery" else "")
             ),
         )

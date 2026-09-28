@@ -155,6 +155,7 @@ from gateway.platforms.base_exec_approval import EA_HEADER_TEXT
 from plugins.platforms.matrix.room_inspection import inspect_matrix_room
 from plugins.platforms.matrix.room_admin import administer_matrix_pin, administer_matrix_room
 from plugins.platforms.matrix.image_packs import matrix_image_packs
+from plugins.platforms.matrix.unread import MatrixUnreadState
 from gateway.platforms.base import (
     gateway_trust_env, BasePlatformAdapter, ExecApprovalPrompt,
     SendResult, resolve_proxy_url, proxy_kwargs_for_aiohttp, _ssrf_redirect_guard,
@@ -777,6 +778,7 @@ class MatrixAdapter(MatrixInboundEventMixin, MatrixMediaMixin, MatrixInvitesMixi
         self._sync_checkpoints: SyncCheckpoints | None = None
         self._reset_clock_skew_detector()
         self._last_sync_ts: float = 0.0
+        self._unread = MatrixUnreadState()
         self._dm_rooms: Dict[str, bool] = {}
         self._room_identities: Dict[str, MatrixRoomIdentity] = {}
         self._room_identity_cached_at: Dict[str, float] = {}

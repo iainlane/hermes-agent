@@ -18,6 +18,7 @@ from plugins.platforms.matrix.sync_transport import (
     DurableSyncStore, SyncCheckpoints, SyncDispatch, create_sync_client, is_invalid_sync_cursor,
 )
 from plugins.platforms.matrix.voice_mention import ParkedVoices
+from plugins.platforms.matrix.unread import SYNC_FILTER
 
 
 if TYPE_CHECKING:
@@ -156,14 +157,14 @@ class MatrixIntakeMixin(BasePlatformAdapter):
             since = await client.sync_store.get_next_batch()
             self._resuming_sync = bool(since)
             try:
-                sync_data = await client.sync(since=since, timeout=10000, full_state=True)
+                sync_data = await client.sync(since=since, timeout=10000, full_state=True, filter_id=SYNC_FILTER)
             except Exception as exc:
                 if not since or not is_invalid_sync_cursor(exc):
                     raise
                 logger.warning("Matrix: saved sync cursor was rejected; refreshing full state")
                 # A full sync returns recent history that was handled before the restart.
                 self._resuming_sync = False
-                sync_data = await client.sync(timeout=10000, full_state=True)
+                sync_data = await client.sync(timeout=10000, full_state=True, filter_id=SYNC_FILTER)
             if isinstance(sync_data, dict):
                 self._joined_rooms.clear()
                 await self._absorb_sync(client, sync_data, initial=True)
@@ -200,6 +201,7 @@ class MatrixIntakeMixin(BasePlatformAdapter):
             mxid=UserID(self._user_id) if self._user_id else UserID(""), device_id=self._device_id or None,
             api=api, state_store=state_store, sync_store=sync_store)
         self._client = client
+        self._unread.reset()
         if not await self._connect_authenticate(client, api):
             return False
         sync_store = DurableSyncStore(
@@ -262,6 +264,7 @@ class MatrixIntakeMixin(BasePlatformAdapter):
         return True
 
     async def _disconnect_matrix(self: MatrixAdapter) -> None:
+        self._unread.reset()
         self._closing = True
         purge = getattr(self, "_watch_purge_handle", None)
         if purge is not None:
@@ -323,7 +326,7 @@ class MatrixIntakeMixin(BasePlatformAdapter):
                     continue
                 # 45s outer cap guards TCP-level hangs the 30s long-poll timeout cannot catch.
                 # mautrix raises on every non-2xx, so a non-dict here is never an error object.
-                sync_data = await asyncio.wait_for(client.sync(since=next_batch, timeout=30000), timeout=45.0)
+                sync_data = await asyncio.wait_for(client.sync(since=next_batch, timeout=30000, filter_id=SYNC_FILTER), timeout=45.0)
                 if isinstance(sync_data, dict):
                     next_batch = await self._absorb_sync(client, sync_data) or next_batch
                     await asyncio.sleep(0)  # let fresh invite joins start before the next sync
@@ -372,6 +375,9 @@ class MatrixIntakeMixin(BasePlatformAdapter):
         nb = sync_data.get("next_batch")  # incremental syncs resume from here
         if initial:
             await self._refresh_dm_cache()
+        if client is self._client:
+            self._unread.observe(client, sync_data, initial=initial)
+            self._joined_rooms.difference_update(sync_data.get("rooms", {}).get("leave", {}))
         await self._dispatch_sync(sync_data)
         self._schedule_pending_invite_joins(sync_data)
         if nb:
