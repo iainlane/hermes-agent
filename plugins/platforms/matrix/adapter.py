@@ -94,6 +94,7 @@ from plugins.platforms.matrix.reply_context import (
     MatrixEventContext, MatrixEventContextCache, MatrixReplyContext, extract_mx_reply_quote, _label_body,
 )
 from plugins.platforms.matrix.read_context import read_matrix_context
+from plugins.platforms.matrix.room_inspection import inspect_matrix_room
 from gateway.platforms.base_exec_approval import EA_HEADER_TEXT
 from gateway.platforms.base import (
     gateway_trust_env, BasePlatformAdapter, ExecApprovalPrompt,
@@ -3161,6 +3162,11 @@ class MatrixAdapter(MatrixRichContentMixin, MatrixContextMixin, BasePlatformAdap
             self, kind, room_id, event_id, limit,
             requester=requester,
         )
+
+    async def inspect_matrix_room(
+        self, kind: str, room_id: str, limit: int, *, requester: str,
+    ) -> dict:
+        return await inspect_matrix_room(self, kind, room_id, limit, requester=requester)
 
     async def _fetch_m_direct(self, *, log_failure: bool = False, require_dict: bool = False):
         """Return the m.direct account-data mapping, or None when absent/unreadable."""

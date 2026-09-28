@@ -8,7 +8,7 @@ import time
 from collections.abc import Callable
 from textwrap import dedent
 
-from nio import RoomMessageText, RoomSendResponse
+from nio import RoomMessageText, RoomPutStateResponse, RoomSendResponse
 
 from tests.fakes.fake_llm_provider import Text, ToolCall
 from tests.integration.matrix_live.conftest import LinuxNioObserver, LiveGateway, LiveRoom
@@ -239,5 +239,86 @@ def test_model_reads_valid_encrypted_edit_and_ignores_edit_without_new_content(
             }],
             "errors": [],
         }]
+    finally:
+        record_property("body_seconds", round(time.monotonic() - started, 3))
+
+
+def test_model_inspects_live_room_state_members_permissions_and_pins(
+    gateway: LiveGateway,
+    live_room: LiveRoom,
+    record_property: Callable[[str, object], None],
+) -> None:
+    async def exchange() -> None:
+        client = live_room.observer.client(live_room.homeserver)
+        bot_client = live_room.bot.client(live_room.homeserver)
+        try:
+            await asyncio.wait_for(client.sync(timeout=0), timeout=15)
+
+            async def send_and_wait(body: str, expected_reply: str) -> None:
+                sent = await client.room_send(
+                    live_room.room_id, "m.room.message", {"msgtype": "m.text", "body": body},
+                )
+                assert isinstance(sent, RoomSendResponse), sent
+                while True:
+                    response = await client.sync(timeout=250)
+                    joined = response.rooms.join.get(live_room.room_id)
+                    if joined and any(
+                        isinstance(event, RoomMessageText)
+                        and event.sender == live_room.bot.user_id
+                        and event.body == expected_reply
+                        for event in joined.timeline.events
+                    ):
+                        return
+
+            await asyncio.wait_for(send_and_wait("Start room inspection", "Matrix live reply"), timeout=15)
+            topic = await client.room_put_state(
+                live_room.room_id, "m.room.topic", {"topic": "Release notes"},
+            )
+            assert isinstance(topic, RoomPutStateResponse), topic
+            pinned = await bot_client.room_send(
+                live_room.room_id, "m.room.message", {"msgtype": "m.text", "body": "Pinned plan"},
+            )
+            assert isinstance(pinned, RoomSendResponse), pinned
+            pin_state = await client.room_put_state(
+                live_room.room_id, "m.room.pinned_events", {"pinned": [pinned.event_id]},
+            )
+            assert isinstance(pin_state, RoomPutStateResponse), pin_state
+
+            gateway.model.push(
+                ToolCall("tool_search", {"queries": ["Matrix room state members permissions pins"]}),
+                ToolCall(
+                    "tool_call", {"calls": [{"name": "matrix_read", "arguments": {"kind": "state"}}]},
+                    parallel=[
+                        ("tool_call", {"calls": [{"name": "matrix_read", "arguments": {"kind": kind}}]})
+                        for kind in ("members", "permissions", "pins")
+                    ],
+                ),
+                Text("Inspection complete"),
+            )
+            await asyncio.wait_for(send_and_wait("Inspect this room", "Inspection complete"), timeout=20)
+
+            requests = gateway.model.main_requests()
+            assert len(requests) == 4
+            results = [
+                json.loads(message["content"])
+                for message in requests[3]["messages"] if message["role"] == "tool"
+            ]
+            assert len(results) == 5
+            inspected = results[1:]
+            assert inspected[0]["topic"] == "Release notes"
+            assert {member["user_id"] for member in inspected[1]["members"]} == {
+                live_room.observer.user_id, live_room.bot.user_id,
+            }
+            assert inspected[1]["total"] == 2
+            assert inspected[2]["bot"]["user_id"] == live_room.bot.user_id
+            assert inspected[3]["events"][0]["body"] == "Pinned plan"
+            assert inspected[3]["events"][0]["event_id"] == pinned.event_id
+        finally:
+            await client.close()
+            await bot_client.close()
+
+    started = time.monotonic()
+    try:
+        asyncio.run(asyncio.wait_for(exchange(), timeout=45))
     finally:
         record_property("body_seconds", round(time.monotonic() - started, 3))
