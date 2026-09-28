@@ -265,9 +265,8 @@ class GatewayInboundContextMixin:
                 message_text = f"{discord_triggering_note(event.message_id)}\n\n{message_text}"
 
         if getattr(event, "metadata", None) and event.metadata.get("edited_message"):
-            # Platform edit forwarded as a new turn (e.g. Matrix ``process_edits``): flag it so the
-            # agent treats this as a correction/follow-up rather than an unrelated fresh prompt.
-            message_text = f"[Edited message — this corrects/replaces your previous prompt]\n\n{message_text}"
+            target = event.metadata.get("edited_message_original_id") or "unknown"
+            message_text = f"[Correction to earlier message {target}]\n\n{message_text}"
         return message_text
 
 
@@ -381,6 +380,11 @@ class GatewayInboundContextMixin:
         self._consume_pending_native_image_paths(session_key)
 
         adapter = self._intake_adapter_for(source)
+        if event._queue_at_turn_boundary:
+            intake: BasePlatformAdapter | None = adapter
+            if (not self._is_user_authorized_for_source(source) or intake is None
+                    or not await intake.validate_inbound_event(event)):
+                return None
         context_snapshot = None
         fetch_inbound_context = getattr(type(adapter), "fetch_inbound_context", None)
         if callable(fetch_inbound_context):

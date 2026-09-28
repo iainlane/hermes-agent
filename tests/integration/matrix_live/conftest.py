@@ -612,7 +612,7 @@ def gateway(
     room_id = live_room.room_id
     mode = settings.mode
     resolution_pause = mode == "pause-resolution"
-    context_pause = mode in {"pause-context", "pause-image-context", "pause-image-conversion", "pause-queued-context"}
+    context_pause = mode in {"pause-context", "pause-image-context", "pause-image-conversion", "pause-queued-context", "pause-edit-followups", "pause-edit-default"}
     native_images = mode in {"pause-image-context", "pause-image-conversion", "image-packs"}
     home = gateway_home
     route = _host_route(network)
@@ -633,11 +633,14 @@ def gateway(
                     + f"    read_receipts: {matrix_feedback.read_receipts}\n"
                     + f"    reactions: {str(matrix_feedback.reactions).lower()}\n"
                     + ("    thread_require_mention: true\n" if mode == "pause-context" or resolution_pause else "")
-                    + (f"    free_response_rooms:\n      - {room_id!r}\n" if resolution_pause else ""),
+                    + (f"    free_response_rooms:\n      - {room_id!r}\n" if resolution_pause else "")
+                    + (f"    process_edits:\n      '{room_id}': true\n" if mode == "pause-edit-followups" else ""),
                     1,
                 )
                 + ("auxiliary:\n  background_review:\n    enabled: false\n  title_generation:\n    model_upgrade_enabled: false\n"
                    if mode in {"inspection", "pause-image-context", "image-packs"} else "")
+                + ("auxiliary:\n  background_review:\n    enabled: false\n  title_generation:\n    enabled: false\n    model_upgrade_enabled: false\n"
+                   if mode in {"pause-edit-followups", "pause-edit-default"} else "")
                 + ("plugins:\n  enabled:\n    - matrix-live-context\n"
                    if context_pause else "")
                 + ("plugins:\n  enabled:\n    - matrix-live-resolution\n" if resolution_pause else "")
@@ -758,6 +761,9 @@ def gateway(
                     "        expected = get_hermes_home() / 'expected-media-change'\n"
                     "        from plugins.platforms.matrix.effective_event import event_content\n"
                     "        relation = event_content(event).get('m.relates_to', {})\n"
+                    "        if relation.get('rel_type') == 'm.replace':\n"
+                    "            with (get_hermes_home() / 'edits-observed').open('a', encoding='utf-8') as observed:\n"
+                    "                observed.write(str(event.event_id) + '\\n')\n"
                     "        if expected.exists() and relation.get('event_id') == expected.read_text(encoding='utf-8'):\n"
                     "            signal('media-change-observed', relation['event_id'])\n"
                     "    self._on_room_message = observed_message\n"
