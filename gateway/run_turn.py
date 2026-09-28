@@ -24,7 +24,7 @@ from contextvars import copy_context
 from gateway.config import Platform
 from gateway.media_repair import repair_explicit_computer_use_media_paths
 from gateway.platforms.base import BasePlatformAdapter, ProcessingOutcome
-from gateway.platforms.event import MessageEvent, MessageType
+from gateway.platforms.event import MessageEvent, MessageType, _ProcessingCompletion
 from gateway.response_filters import (
     display_kind_for_event, is_machinery_display_kind, reply_expected_metadata, silence_allowed,
 )
@@ -2150,7 +2150,9 @@ class GatewayTurnMixin:
             persist_user_display_kind, session_entry.session_id, owner,
         ), _session_env_tokens
 
-    async def _handle_message_with_agent(self, event, source, _quick_key: str, run_generation: int):
+    async def _handle_message_with_agent(
+        self: "GatewayRunner", event, source, _quick_key: str, run_generation: int
+    ):
         """Inner handler that runs under the _running_agents sentinel guard."""
         _msg_start_time = time.time()
         _platform_name = source.platform.value if hasattr(source.platform, "value") else str(source.platform)
@@ -2765,7 +2767,7 @@ class GatewayTurnMixin:
 
     async def _run_agent_via_proxy(
         self, message: str, context_prompt: str, history: List[Dict[str, Any]],
-        source: "SessionSource", session_id: str, session_key: str = None,
+        source: "SessionSource", session_id: Optional[str], session_key: str = None,
         run_generation: Optional[int] = None, event_message_id: Optional[str] = None,
         scheduled_heartbeat: bool = False,
     ) -> Dict[str, Any]:
@@ -2941,8 +2943,8 @@ class GatewayTurnMixin:
         }
 
     async def _run_agent(
-        self, message: str, context_prompt: str, history: List[Dict[str, Any]],
-        source: SessionSource, session_id: str, **turn_kwargs,
+        self: "GatewayRunner", message: str, context_prompt: str, history: List[Dict[str, Any]],
+        source: SessionSource, session_id: Optional[str], **turn_kwargs,
     ) -> Dict[str, Any]:
         """Profile-scoping wrapper around ``_run_agent_inner`` (same keyword parameters; pass-through
         when multiplexing is off)."""
@@ -3655,7 +3657,7 @@ class GatewayTurnMixin:
                 _mark_turn(turn_ctx.session_key, turn_ctx.run_generation)
 
     async def _run_agent_drain_pending(
-        self, result: Any, adapter: Any, source: SessionSource, session_key: Optional[str],
+        self: "GatewayRunner", result: Any, adapter: Any, source: SessionSource, session_key: Optional[str],
         processing_event: Optional[MessageEvent] = None,
     ) -> Tuple[Any, Optional[str]]:
         """Dequeue the adapter's pending / interrupt / leftover-steer follow-up as ``(pending_event, pending)``.
@@ -3666,6 +3668,10 @@ class GatewayTurnMixin:
         )
         pending_event = None
         pending = None
+        pending_steer = result.get("pending_steer") if result else None
+        pending_input = None
+        if result and processing_event is not None:
+            pending_input = processing_event._processing_state.take_pending_input(pending_steer or "")
         if result and adapter and session_key:
             pending_event = _dequeue_pending_event(adapter, session_key)
             # /queue overflow: promote the next queued event into the consumed "next-up" slot so the
@@ -3695,13 +3701,19 @@ class GatewayTurnMixin:
                     logger.debug("Processing queued message after agent completion: '%s...'", pending[:40])
 
         # Leftover /steer (arrived after the last tool batch): deliver as the next user turn.
-        if result and not pending and not pending_event and result.get("pending_steer"):
-            pending = result.get("pending_steer")
-            if processing_event is not None:
-                pending_input = processing_event._processing_state.take_pending_input()
-                if pending_input is not None:
-                    pending_event = dataclasses.replace(pending_input, text=pending, message_type=MessageType.TEXT)
-            logger.debug("Delivering leftover /steer as next turn: '%s...'", pending[:40])
+        if pending_steer:
+            steer_event = (
+                dataclasses.replace(pending_input, text=pending_steer, message_type=MessageType.TEXT)
+                if pending_input is not None else None
+            )
+            if pending or pending_event:
+                if adapter and session_key:
+                    self._enqueue_fifo(
+                        session_key, steer_event or MessageEvent(text=pending_steer, source=source), adapter
+                    )
+            else:
+                pending_event, pending = steer_event, pending_steer
+                logger.debug("Delivering leftover /steer as next turn: '%s...'", pending[:40])
 
         # Safety net: a pending slash command is never passed to the agent as user input.
         if pending and pending.strip().startswith("/"):
@@ -3806,7 +3818,7 @@ class GatewayTurnMixin:
         return delivered
 
     async def _run_agent_queued_followup(
-        self, turn_ctx: TurnContext, adapter: Any, pending: Optional[str], pending_event: Any,
+        self: "GatewayRunner", turn_ctx: TurnContext, adapter: Any, pending: Optional[str], pending_event: Any,
         response: Any, result: Any, stream_task: Any,
     ) -> Any:
         """Run the queued / interrupting follow-up as the next turn (recursive ``_run_agent``)."""
@@ -3839,7 +3851,9 @@ class GatewayTurnMixin:
                 adapter.queue_message(session_key, pending)
             return turn_ctx.result_holder[0] or {"final_response": response, "messages": history}
 
-        from gateway.run_turn_followup_ack import _followup_cancel_outcome, _run_followup_processing_hook
+        from gateway.run_turn_followup_ack import (
+            _followup_cancel_outcome, _followup_processing_hooks_apply, _run_followup_processing_hook,
+        )
         completed_event = turn_ctx.processing_event
         completed_adapter = self._intake_adapter_for(completed_event.source) if completed_event is not None else None
         # Interrupted: discard the response ("Operation interrupted." is noise).
@@ -3951,9 +3965,14 @@ class GatewayTurnMixin:
             await _run_followup_processing_hook(
                 _hook_adapter, pending_event, "on_processing_complete", ProcessingOutcome.FAILURE)
             raise
-        await _run_followup_processing_hook(
-            _hook_adapter, pending_event, "on_processing_complete",
-            ProcessingOutcome.from_agent_result(followup_result))
+        followup_outcome = ProcessingOutcome.from_agent_result(followup_result)
+        if (completed_event is not None and _hook_adapter is not None
+                and _followup_processing_hooks_apply(_hook_adapter, pending_event)
+                and followup_outcome == ProcessingOutcome.SUCCESS and not followup_result.get("already_sent")):
+            completed_event._processing_state.pending_completion = _ProcessingCompletion(_hook_adapter, pending_event)
+        else:
+            await _run_followup_processing_hook(
+                _hook_adapter, pending_event, "on_processing_complete", followup_outcome)
         merged = _preserve_queued_followup_history_offset(result, followup_result)
         # The TERMINAL turn of the chain owns the ledger identity for the outer final send, which
         # the adapter brackets against the event that OPENED the chain. Without this the terminal
@@ -4260,8 +4279,8 @@ class GatewayTurnMixin:
                 logger.debug("Long-running notification error: %s", _ne)
 
     async def _run_agent_inner(
-        self, message: str, context_prompt: str, history: List[Dict[str, Any]],
-        source: SessionSource, session_id: str, session_key: str = None,
+        self: "GatewayRunner", message: str, context_prompt: str, history: List[Dict[str, Any]],
+        source: SessionSource, session_id: Optional[str], session_key: str = None,
         run_generation: Optional[int] = None, _interrupt_depth: int = 0,
         event_message_id: Optional[str] = None, inbound_message_id: Optional[str] = None,
         channel_prompt: Optional[str] = None, moa_config: Optional[dict] = None,
