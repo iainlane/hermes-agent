@@ -269,7 +269,10 @@ def gateway(
     native_images = mode in {"pause-image-context", "pause-image-conversion"}
     home = tmp_path / "hermes"
     home.mkdir(mode=0o777)
-    with FakeLLMServer([Text("Matrix live reply")], bind_host="0.0.0.0") as model:
+    script = [] if mode == "inspection" else [Text("Matrix live reply")]
+    with FakeLLMServer(
+        script, bind_host="0.0.0.0", default_text="Matrix live reply" if mode == "inspection" else "ok",
+    ) as model:
         write_hermes_home(
             home,
             f"http://host.docker.internal:{model.port}/v1",
@@ -279,6 +282,8 @@ def gateway(
                 + ("    thread_require_mention: true\n" if mode == "pause-context" or resolution_pause else "")
                 + (f"    free_response_rooms:\n      - {room_id!r}\n" if resolution_pause else "")
                 + "updates:\n  check: false\n"
+                + ("auxiliary:\n  title_generation:\n    model_upgrade_enabled: false\n"
+                   if mode == "inspection" else "")
                 + ("display:\n  busy_input_mode: queue\n  busy_ack_enabled: false\n"
                    if mode == "pause-queued-context" else "")
                 + ("plugins:\n  enabled:\n    - matrix-live-context\n"

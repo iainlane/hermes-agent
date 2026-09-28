@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
+from urllib.parse import quote
 
-from plugins.platforms.matrix.read_context import _read_access, _raw_event, _visible_event
+from gateway.session_context import get_session_env, get_session_transport
+from hermes_constants import hermes_home_key
+from plugins.platforms.matrix.read_context import MatrixReadEvent, Method, _read_access, _raw_event, _visible_event
+from plugins.platforms.matrix.reply_context import MatrixEventContext, MatrixEventContextCache
 
 
 def _content(value: Any) -> dict[str, Any]:
@@ -20,9 +24,9 @@ def _content(value: Any) -> dict[str, Any]:
     return {}
 
 
-async def _state(client: Any, room_id: str, event_type: str) -> dict[str, Any]:
+async def _state(context: _InspectionContext, event_type: str) -> dict[str, Any]:
     try:
-        value = await asyncio.wait_for(client.get_state_event(room_id, event_type), timeout=10.0)
+        value = await context.request(lambda: context.client.get_state_event(context.room_id, event_type))
     except Exception as exc:
         if getattr(exc, "errcode", None) == "M_NOT_FOUND" or type(exc).__name__ == "MNotFound":
             return {}
@@ -54,11 +58,12 @@ def _user_level(content: dict[str, Any], user_id: str, legacy_strings: bool) -> 
     return _numeric_level(users.get(user_id), default, legacy_strings)
 
 
-async def _permissions(client: Any, room_id: str, requester: str, bot: str) -> dict[str, Any]:
-    power = await _state(client, room_id, "m.room.power_levels")
-    encryption = await _state(client, room_id, "m.room.encryption")
-    create_event = await asyncio.wait_for(
-        client.get_state_event(room_id, "m.room.create", format="event"), timeout=10.0,
+async def _permissions(context: _InspectionContext) -> dict[str, Any]:
+    requester, bot = context.requester, context.owner.bot_id
+    power = await _state(context, "m.room.power_levels")
+    encryption = await _state(context, "m.room.encryption")
+    create_event = await context.request(
+        lambda: context.client.get_state_event(context.room_id, "m.room.create", format="event"),
     )
     create = _content(create_event)
     room_version = _text(create, "room_version") or "1"
@@ -114,19 +119,83 @@ async def _permissions(client: Any, room_id: str, requester: str, bot: str) -> d
     }
 
 
-async def _pinned_event(
-    adapter: Any, client: Any, room_id: str, chat_type: str, event_id: str,
-) -> tuple[dict | None, dict | None]:
-    try:
-        raw = _raw_event(await asyncio.wait_for(client.get_event(room_id, event_id), timeout=10.0))
-    except Exception as exc:
-        return None, {"event_id": event_id, "error": f"Matrix event read failed: {type(exc).__name__}"}
-    if raw.get("event_id") != event_id:
-        return None, {"event_id": event_id, "error": "Matrix event was not returned"}
-    visible, error = await _visible_event(adapter, raw, room_id, chat_type)
-    if visible is None and error is None:
-        error = {"event_id": event_id, "error": "event has no visible message"}
-    return visible, error
+class _InspectionRejected(Exception):
+    def __init__(self, error: dict[str, str]) -> None:
+        self.error = error
+        super().__init__(error["error"])
+
+
+def _session_identity() -> tuple[str, ...]:
+    return tuple(str(get_session_env(key) or "") for key in (
+        "HERMES_SESSION_PLATFORM", "HERMES_SESSION_CHAT_ID", "HERMES_SESSION_USER_ID",
+        "HERMES_SESSION_PROFILE", "HERMES_SESSION_KEY", "HERMES_SESSION_ID",
+    ))
+
+
+@dataclass(frozen=True)
+class _InspectionOwner:
+    adapter: Any
+    client: Any
+    cache: MatrixEventContextCache | None
+    home: str
+    transport: tuple[Any, Any]
+    session: tuple[str, ...]
+    bot_id: str
+    account_id: str
+    device_id: str
+    api: Any
+    api_url: str
+    api_token: str | None
+    http_session: Any
+    crypto: Any
+    crypto_store: Any
+    store_dir: Any
+
+    @classmethod
+    def capture(cls, adapter: Any) -> _InspectionOwner:
+        client = adapter._client
+        api = getattr(client, "api", None)
+        crypto = getattr(client, "crypto", None)
+        return cls(
+            adapter, client, getattr(adapter, "_event_context_cache", None), hermes_home_key(),
+            get_session_transport(), _session_identity(), str(adapter._user_id or ""),
+            str(getattr(client, "mxid", "") or ""), str(getattr(client, "device_id", "") or ""),
+            api, str(getattr(api, "base_url", "") or ""), getattr(api, "token", None),
+            getattr(api, "session", None), crypto, getattr(crypto, "crypto_store", None),
+            getattr(adapter, "_store_dir", None),
+        )
+
+    def check(self, room_id: str, requester: str) -> None:
+        if getattr(self.adapter, "_closing", False) or self.adapter._client is None:
+            raise _InspectionRejected({"error": "Matrix client is disconnected"})
+        current = self.capture(self.adapter)
+        if (
+            current.client is not self.client or current.cache is not self.cache
+            or current.api is not self.api or current.http_session is not self.http_session
+            or current.crypto is not self.crypto or current.crypto_store is not self.crypto_store
+            or current.transport[0] is not self.transport[0] or current.transport[1] is not self.transport[1]
+            or current.home != self.home or current.session != self.session
+            or current.bot_id != self.bot_id or current.account_id != self.account_id
+            or current.device_id != self.device_id or current.api_url != self.api_url
+            or current.api_token != self.api_token or current.store_dir != self.store_dir
+            or (self.transport[0] is not None and (
+                self.transport[0] is not self.adapter or self.session[:3] != ("matrix", room_id, requester)
+            ))
+        ):
+            raise _InspectionRejected({"error": "Matrix room inspection context changed"})
+
+    async def access(self, room_id: str, requester: str, chat_type: str | None = None) -> str:
+        self.check(room_id, requester)
+        client, current_chat_type, error = await asyncio.wait_for(
+            _read_access(self.adapter, room_id, requester), timeout=10.0,
+        )
+        self.check(room_id, requester)
+        if error is not None:
+            raise _InspectionRejected(error)
+        if client is not self.client or (chat_type is not None and current_chat_type != chat_type):
+            raise _InspectionRejected({"error": "Matrix room inspection context changed"})
+        assert current_chat_type is not None
+        return current_chat_type
 
 
 @dataclass(frozen=True)
@@ -137,6 +206,51 @@ class _InspectionContext:
     chat_type: str
     requester: str
     limit: int
+    owner: _InspectionOwner
+    dependencies: dict[str, MatrixEventContext] = field(default_factory=dict, compare=False)
+
+    async def check_access(self) -> None:
+        await self.owner.access(self.room_id, self.requester, self.chat_type)
+
+    async def request(self, operation: Callable[[], Awaitable[Any]]) -> Any:
+        await self.check_access()
+        try:
+            return await asyncio.wait_for(operation(), timeout=10.0)
+        finally:
+            await self.check_access()
+
+
+async def _pinned_event(context: _InspectionContext, event_id: str) -> MatrixReadEvent:
+    cache = context.owner.cache
+    assert cache is not None
+    before = context.dependencies[event_id]
+    raw = {"event_id": event_id, "room_id": context.room_id}
+    try:
+        await context.check_access()
+        path = (
+            f"/_matrix/client/v3/rooms/{quote(context.room_id, safe='')}"
+            f"/event/{quote(event_id, safe='')}"
+        )
+        raw = _raw_event(await asyncio.wait_for(context.client.api.request(Method.GET, path), timeout=10.0))
+        context.dependencies.update(cache.retain_events(context.room_id, [raw]))
+        await context.check_access()
+    except _InspectionRejected:
+        raise
+    except Exception as exc:
+        return MatrixReadEvent(raw, None, {
+            "event_id": event_id, "error": f"Matrix event read failed: {type(exc).__name__}",
+        }, None, cache.history_entry(context.room_id, event_id))
+    if raw.get("event_id") != event_id:
+        return MatrixReadEvent({"event_id": event_id, "room_id": context.room_id}, None, {
+            "event_id": event_id, "error": "Matrix event was not returned",
+        }, None, cache.history_entry(context.room_id, event_id))
+    visible, error, replacement_id = await _visible_event(
+        context.adapter, raw, context.room_id, context.chat_type, before=before,
+    )
+    await context.check_access()
+    if visible is None and error is None:
+        error = {"event_id": event_id, "error": "event has no visible message"}
+    return MatrixReadEvent(raw, visible, error, replacement_id, cache.history_entry(context.room_id, event_id))
 
 
 async def _inspect_state(context: _InspectionContext) -> dict[str, Any]:
@@ -150,12 +264,12 @@ async def _inspect_state(context: _InspectionContext) -> dict[str, Any]:
     }
     result = {"room_id": context.room_id}
     for key, (event_type, field) in fields.items():
-        result[key] = _text(await _state(context.client, context.room_id, event_type), field)
+        result[key] = _text(await _state(context, event_type), field)
     return result
 
 
 async def _inspect_members(context: _InspectionContext) -> dict[str, Any]:
-    profiles = await asyncio.wait_for(context.client.get_joined_members(context.room_id), timeout=10.0)
+    profiles = await context.request(lambda: context.client.get_joined_members(context.room_id))
     members = []
     for user_id, profile in sorted(profiles.items(), key=lambda item: str(item[0]))[:context.limit]:
         content = _content(profile)
@@ -170,28 +284,37 @@ async def _inspect_members(context: _InspectionContext) -> dict[str, Any]:
 
 
 async def _inspect_permissions(context: _InspectionContext) -> dict[str, Any]:
-    return await _permissions(context.client, context.room_id, context.requester, context.adapter._user_id)
+    return await _permissions(context)
 
 
 async def _inspect_pins(context: _InspectionContext) -> dict[str, Any]:
-    pinned = await _state(context.client, context.room_id, "m.room.pinned_events")
+    cache = context.owner.cache
+    assert cache is not None
+    cached = cache.snapshot(context.room_id)
+    pinned = await _state(context, "m.room.pinned_events")
     event_ids = pinned.get("pinned")
     if not isinstance(event_ids, list) or not all(isinstance(value, str) for value in event_ids):
         event_ids = []
     selected = event_ids[:context.limit]
+    for event_id in selected:
+        context.dependencies[event_id] = cached.get(event_id) or cache.retain(context.room_id, event_id)
     semaphore = asyncio.Semaphore(10)
 
-    async def fetch(event_id: str) -> tuple[dict | None, dict | None]:
+    async def fetch(event_id: str) -> MatrixReadEvent:
         async with semaphore:
-            return await _pinned_event(
-                context.adapter, context.client, context.room_id, context.chat_type, event_id,
-            )
+            return await _pinned_event(context, event_id)
 
     resolved = await asyncio.gather(*(fetch(event_id) for event_id in selected))
+    for snapshot in resolved:
+        await context.check_access()
+        await snapshot.refresh(context.adapter, context.room_id, context.chat_type)
+    await context.check_access()
+    for snapshot in resolved:
+        snapshot.recheck(context.adapter, context.room_id, context.chat_type)
     return {
-        "events": [visible for visible, _ in resolved if visible is not None],
+        "events": [snapshot.visible for snapshot in resolved if snapshot.visible is not None],
         "total": len(event_ids), "truncated": len(event_ids) > context.limit,
-        "errors": [failure for _, failure in resolved if failure is not None],
+        "errors": [snapshot.error for snapshot in resolved if snapshot.error is not None],
     }
 
 
@@ -206,16 +329,15 @@ _INSPECTION_HANDLERS: dict[str, Callable[[_InspectionContext], Awaitable[dict[st
 async def inspect_matrix_room(
     adapter: Any, kind: str, room_id: str, limit: int, *, requester: str,
 ) -> dict[str, Any]:
-    client, chat_type, error = await _read_access(adapter, room_id, requester)
-    if error is not None:
-        return error
-    assert chat_type is not None
     handler = _INSPECTION_HANDLERS.get(kind)
     if handler is None:
         return {"error": "kind must be state, members, permissions, or pins"}
-
-    context = _InspectionContext(adapter, client, room_id, chat_type, requester, limit)
+    owner = _InspectionOwner.capture(adapter)
     try:
+        chat_type = await owner.access(room_id, requester)
+        context = _InspectionContext(adapter, owner.client, room_id, chat_type, requester, limit, owner)
         return await handler(context)
+    except _InspectionRejected as exc:
+        return exc.error
     except Exception as exc:
         return {"error": f"Matrix room inspection failed: {type(exc).__name__}"}
