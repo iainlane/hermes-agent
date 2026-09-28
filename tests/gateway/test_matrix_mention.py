@@ -286,13 +286,13 @@ async def test_bare_mention_claims_parked_voice_only_in_same_room(
         release_first = asyncio.Event()
         first = True
 
-        async def gated_identity(room_id):
+        async def gated_identity(room_id, **kwargs):
             nonlocal first
             if first:
                 first = False
                 first_waiting.set()
                 await release_first.wait()
-            return await resolve_identity(room_id)
+            return await resolve_identity(room_id, **kwargs)
 
         mark = adapter._parked_voices.mark
 
