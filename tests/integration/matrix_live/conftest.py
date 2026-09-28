@@ -260,7 +260,6 @@ def gateway(
     gateway_image: str,
     synapse: tuple[DockerContainer, str, Network],
     live_room: LiveRoom,
-    request: pytest.FixtureRequest,
 ) -> Iterator[LiveGateway]:
     _, _, network = synapse
     room_id = live_room.room_id
