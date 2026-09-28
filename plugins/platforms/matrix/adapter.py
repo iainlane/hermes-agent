@@ -2242,7 +2242,7 @@ class MatrixAdapter(BasePlatformAdapter):
             media_urls=media_urls, media_types=[media_type] if media_urls else None, media_msgtype=msgtype)
         if msg_event is not None:
             if receipt_event_id:
-                msg_event.metadata["matrix_read_receipt_event_id"] = receipt_event_id
+                msg_event.read_receipt_message_id = receipt_event_id
             await self.handle_message(msg_event)
 
     @staticmethod
@@ -2459,8 +2459,8 @@ class MatrixAdapter(BasePlatformAdapter):
 
     async def on_processing_complete(self, event: MessageEvent, outcome: ProcessingOutcome) -> None:
         msg_id, room_id = event.message_id, event.source.chat_id
-        if self._read_receipts_mode.should_send_on_completion(outcome) and msg_id and room_id:
-            receipt_id = event.metadata.get("matrix_read_receipt_event_id") or msg_id
+        receipt_id = event.read_receipt_message_id or msg_id
+        if self._read_receipts_mode.should_send_on_completion(outcome) and receipt_id and room_id:
             self._background_read_receipt(room_id, receipt_id)
         if not self._reactions_enabled or not msg_id or not room_id or outcome == ProcessingOutcome.CANCELLED:
             return

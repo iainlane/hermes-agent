@@ -92,6 +92,8 @@ class MessageEvent:
     # knows the message was meant for someone else); None means unknown and keeps the visible
     # fallback, like True.
     reply_expected: Optional[bool] = None
+    # Latest native input covered by this turn; independent of its reply anchor and ledger id.
+    read_receipt_message_id: Optional[str] = None
 
     # Process-local admission receipt, never routing metadata or execution acknowledgement.
     _gateway_accepted: bool = field(default=False, init=False, repr=False, compare=False)
@@ -102,6 +104,12 @@ class MessageEvent:
         """One turn now answers *other* too: an addressed message wins, then an unknown one."""
         if self.reply_expected is not True and other.reply_expected is not False:
             self.reply_expected = other.reply_expected
+
+    def absorb_turn_input(self, other: "MessageEvent") -> None:
+        self.absorb_reply_expected(other)
+        receipt_id = other.read_receipt_message_id or other.message_id
+        if receipt_id:
+            self.read_receipt_message_id = receipt_id
 
     def is_command(self) -> bool:
         """Check if this is a command message (e.g., /new, /reset)."""
