@@ -105,6 +105,12 @@ class GatewaySettings:
 
 
 @dataclass(frozen=True)
+class MatrixFeedbackSettings:
+    read_receipts: str = "immediate"
+    reactions: bool = False
+
+
+@dataclass(frozen=True)
 class LinuxNioObserver:
     container: DockerContainer
     account: MatrixAccount
@@ -492,6 +498,11 @@ def gateway_home(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
+def matrix_feedback() -> MatrixFeedbackSettings:
+    return MatrixFeedbackSettings()
+
+
+@pytest.fixture
 def gateway(
     request: pytest.FixtureRequest,
     gateway_home: Path,
@@ -503,6 +514,7 @@ def gateway(
     gateway_home_setup: Callable[[Path], None],
     gateway_auxiliary_config: str,
     model_responder: Responder | None,
+    matrix_feedback: MatrixFeedbackSettings,
 ) -> Iterator[LiveGateway]:
     param = getattr(request, "param", GatewaySettings())
     settings = GatewaySettings(mode=param) if isinstance(param, str) else param
@@ -528,6 +540,8 @@ def gateway(
                 + gateway_config.replace(
                     "    enabled: true\n",
                     "    enabled: true\n"
+                    + f"    read_receipts: {matrix_feedback.read_receipts}\n"
+                    + f"    reactions: {str(matrix_feedback.reactions).lower()}\n"
                     + ("    thread_require_mention: true\n" if mode == "pause-context" or resolution_pause else "")
                     + (f"    free_response_rooms:\n      - {room_id!r}\n" if resolution_pause else ""),
                     1,
@@ -558,7 +572,7 @@ def gateway(
                 f"MATRIX_ACCESS_TOKEN={live_room.bot.access_token}\n"
                 f"MATRIX_ALLOWED_USERS={live_room.observer.user_id}\n"
                 f"MATRIX_HOME_ROOM={room_id}\n"
-                "MATRIX_E2EE_MODE=optional\nMATRIX_REACTIONS=false\nMATRIX_AUTO_THREAD=false\n"
+                "MATRIX_E2EE_MODE=optional\nMATRIX_AUTO_THREAD=false\n"
             )
             if settings.max_message_length is not None:
                 stream.write(f"MATRIX_MAX_MESSAGE_LENGTH={settings.max_message_length}\n")
