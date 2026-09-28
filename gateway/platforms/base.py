@@ -3486,6 +3486,7 @@ class BasePlatformAdapter(ABC):
             if hook_name == "on_processing_start":
                 event._processing_state.deferred = False
                 event._processing_state.completed = False
+                event._processing_state.outcome = None
             elif hook_name in {"on_processing_complete", "on_inline_processing_complete"}:
                 if event._processing_state.deferred or event._processing_state.completed:
                     return
@@ -4039,6 +4040,7 @@ class BasePlatformAdapter(ABC):
                                  self.name, cmd, session_key)
                     await self._dispatch_inline_reply(event)
             except Exception as e:
+                await self._run_processing_hook("on_inline_processing_complete", event, ProcessingOutcome.FAILURE)
                 logger.error("[%s] Command '/%s' dispatch failed: %s", self.name, cmd, e, exc_info=True)
             return
         # Clarify bypass: while blocked on clarify_tool the next message must reach the
@@ -4059,6 +4061,7 @@ class BasePlatformAdapter(ABC):
                 try:
                     await self._dispatch_inline_reply(event)
                 except Exception as e:
+                    await self._run_processing_hook("on_inline_processing_complete", event, ProcessingOutcome.FAILURE)
                     logger.error("[%s] Clarify text-intercept dispatch failed: %s", self.name, e, exc_info=True)
                 return
         if self._busy_session_handler is not None:
@@ -4555,13 +4558,15 @@ class BasePlatformAdapter(ABC):
                     record_delivery=_record_delivery)
             await self._release_turn_marker(event)
             processing_ok = delivery_succeeded if delivery_attempted else not bool(response)
+            outcome = event._processing_state.outcome or ProcessingOutcome.SUCCESS
+            if outcome == ProcessingOutcome.SUCCESS and not processing_ok:
+                outcome = ProcessingOutcome.FAILURE
             # Clean up the per-turn streaming-TTS flag.
             self._streaming_tts_completed_turns.discard(self._streaming_tts_turn_key(
                 session_key, getattr(interrupt_event, "_hermes_run_generation", None),
                 event=event) or "")
             await self._run_processing_hook(
-                "on_processing_complete", event,
-                ProcessingOutcome.SUCCESS if processing_ok else ProcessingOutcome.FAILURE)
+                "on_processing_complete", event, outcome)
             # Force-flush an unfired debounce timer so this task hands off to a fresh drain task.
             # Clear the Event BEFORE the stop-typing await so concurrent inbound sees a live guard.
             await self._flush_text_debounce_now(session_key)

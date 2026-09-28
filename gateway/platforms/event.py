@@ -31,11 +31,21 @@ class ProcessingOutcome(Enum):
     FAILURE = "failure"
     CANCELLED = "cancelled"
 
+    @classmethod
+    def from_agent_result(cls, result: Dict[str, Any]) -> "ProcessingOutcome":
+        """Classify a returned agent result before reply delivery."""
+        if result.get("interrupted"):
+            return cls.CANCELLED
+        if result.get("failed"):
+            return cls.FAILURE
+        return cls.SUCCESS
+
 
 @dataclass
 class _ProcessingState:
     deferred: bool = False
     completed: bool = False
+    outcome: Optional[ProcessingOutcome] = None
 
 
 @dataclass

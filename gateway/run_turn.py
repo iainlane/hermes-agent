@@ -2216,6 +2216,7 @@ class GatewayTurnMixin:
                 message_type=event.message_type,
                 scheduled_heartbeat=bool(getattr(event, "_heartbeat_session_id", None)),
             )
+            event._processing_state.outcome = ProcessingOutcome.from_agent_result(agent_result)
             _turn_seconds = time.monotonic() - _turn_started_monotonic
 
             # A queued (/queue) chain answered the LAST message of the chain, so the outer final
@@ -2271,6 +2272,7 @@ class GatewayTurnMixin:
             )
 
         except Exception as e:
+            event._processing_state.outcome = ProcessingOutcome.FAILURE
             return await self._hmwa_agent_error_reply(e, event, source, session_entry, session_key, prepared)
         finally:
             # Restore session context variables to their pre-handler state
@@ -3941,7 +3943,8 @@ class GatewayTurnMixin:
                 _hook_adapter, pending_event, "on_processing_complete", ProcessingOutcome.FAILURE)
             raise
         await _run_followup_processing_hook(
-            _hook_adapter, pending_event, "on_processing_complete", ProcessingOutcome.SUCCESS)
+            _hook_adapter, pending_event, "on_processing_complete",
+            ProcessingOutcome.from_agent_result(followup_result))
         merged = _preserve_queued_followup_history_offset(result, followup_result)
         # The TERMINAL turn of the chain owns the ledger identity for the outer final send, which
         # the adapter brackets against the event that OPENED the chain. Without this the terminal
