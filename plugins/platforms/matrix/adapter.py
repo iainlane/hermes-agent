@@ -1307,9 +1307,8 @@ class MatrixAdapter(MatrixApprovalMixin, MatrixReactionPromptMixin, MatrixRTCVoi
             return SendResult(success=False, error=f"Matrix target '{target}': {exc}")
         chat_id, metadata = destination.room_id, destination.metadata
         meta = metadata or {}
+        reply_to = meta.get("_stream_reply_to_message_id", reply_to)
         stream_continuation = meta.get("_stream_continuation") is True
-        if stream_continuation:
-            reply_to = meta.get("_stream_reply_to_message_id")
         last_event_id = None
         event_ids: list[str] = []
         formatted = self.format_message(content)
