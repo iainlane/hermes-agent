@@ -457,9 +457,16 @@ def gateway_extra_config() -> str:
 
 
 @pytest.fixture
+def gateway_home(tmp_path: Path) -> Path:
+    home = tmp_path / "hermes"
+    home.mkdir()
+    return home
+
+
+@pytest.fixture
 def gateway(
     request: pytest.FixtureRequest,
-    tmp_path: Path,
+    gateway_home: Path,
     gateway_extra_config: str,
     gateway_image: str,
     synapse: tuple[DockerContainer, str, Network],
@@ -475,8 +482,7 @@ def gateway(
     resolution_pause = mode == "pause-resolution"
     context_pause = mode in {"pause-context", "pause-image-context", "pause-image-conversion", "pause-queued-context"}
     native_images = mode in {"pause-image-context", "pause-image-conversion", "image-packs"}
-    home = tmp_path / "hermes"
-    home.mkdir()
+    home = gateway_home
     route = _host_route(network)
     script = [] if mode == "inspection" else [Text(settings.reply)]
     with FakeLLMServer(
