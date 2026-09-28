@@ -10,11 +10,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional
 
+from gateway.platforms.event import MessageEvent
+
 
 @dataclass
 class TurnContext:
     # read-only turn identity / wiring
     source: Any = None
+    processing_event: Optional[MessageEvent] = None
     reply_expected: Optional[bool] = None
     # Scheduled heartbeats are proactive work, not replies to the source message that
     # registered the watch.  Their routine delivery surfaces stay quiet.

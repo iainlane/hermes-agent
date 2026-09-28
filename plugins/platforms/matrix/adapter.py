@@ -100,6 +100,7 @@ from gateway.platforms.base import (
 from gateway.platforms.base import transcode_to_ogg_opus
 from gateway.platforms.event import MessageEvent, MessageType, ProcessingOutcome
 from gateway.platforms.helpers import ThreadParticipationTracker
+from plugins.platforms.matrix.adapter_feedback import MatrixFeedbackPolicy, ReadReceiptMode
 from plugins.platforms.matrix.voice_mention import ParkedVoices, VoiceGate, has_voice_marker, is_voice_event
 
 logger = logging.getLogger(__name__)
@@ -923,7 +924,10 @@ class MatrixAdapter(BasePlatformAdapter):
         raw_session_scope = str(_extra_or_secret(config.extra, "session_scope", "MATRIX_SESSION_SCOPE", "auto")).strip().lower()
         self._matrix_session_scope = raw_session_scope if raw_session_scope in {"auto", "room", "thread"} else "auto"
         self._process_notices: bool = self._extra_truthy(config, "process_notices", "MATRIX_PROCESS_NOTICES", "false")
-        self._reactions_enabled: bool = str(_extra_or_secret(config.extra, "reactions", "MATRIX_REACTIONS", "true")).lower() not in {"false", "0", "no"}
+
+        feedback = MatrixFeedbackPolicy.from_config(config)
+        self._reactions_enabled: bool = feedback.reactions
+        self._read_receipts_mode: ReadReceiptMode = feedback.read_receipts
         self._pending_reactions: dict[tuple[str, str], str] = {}
         # Let the final message land before redacting reactions ("missing event" in some
         # clients). 5s is empirically safe; if it must be tunable, use config.yaml not env.
@@ -2154,7 +2158,10 @@ class MatrixAdapter(BasePlatformAdapter):
         if thread_id:
             await self._threads.mark_async(thread_id)  # covers real roots and synthetic ones alike
             self._thread_fallbacks.remember(room_id, thread_id, event_id)
-        self._background_read_receipt(room_id, event_id)
+
+        if self._read_receipts_mode == ReadReceiptMode.IMMEDIATE:
+            self._background_read_receipt(room_id, event_id)
+
         return body, is_dm, chat_type, thread_id, display_name, source
 
     async def _extract_reply_context(
@@ -2302,8 +2309,9 @@ class MatrixAdapter(BasePlatformAdapter):
                 voice_id, voice_content, voice_relates = parked
                 await self._handle_media_message(
                     room_id, sender, voice_id, event_ts, voice_content, voice_relates, "m.audio",
-                    mention_claimed=True)
-                self._background_read_receipt(room_id, event_id)  # the claim receipted the voice
+                    mention_claimed=True, receipt_event_id=event_id)
+                if self._read_receipts_mode == ReadReceiptMode.IMMEDIATE:
+                    self._background_read_receipt(room_id, event_id)
                 return
         msg_event = await self._build_inbound_event(
             room_id, sender, event_id, _normalize_matrix_bang_command(body), source_content, relates_to)
@@ -2317,7 +2325,8 @@ class MatrixAdapter(BasePlatformAdapter):
 
     async def _handle_media_message(
         self, room_id: str, sender: str, event_id: str, event_ts: float, source_content: dict,
-        relates_to: dict, msgtype: str, mention_claimed: bool = False) -> None:
+        relates_to: dict, msgtype: str, mention_claimed: bool = False,
+        receipt_event_id: Optional[str] = None) -> None:
         body = source_content.get("body", "") or ""
         url = source_content.get("url", "")
         if url and not str(url).startswith("mxc://"):
@@ -2374,6 +2383,8 @@ class MatrixAdapter(BasePlatformAdapter):
             room_id, sender, event_id, body, source_content, relates_to, ctx=ctx, message_type=msg_type,
             media_urls=media_urls, media_types=[media_type] if media_urls else None, media_msgtype=msgtype)
         if msg_event is not None:
+            if receipt_event_id:
+                msg_event._processing_state.receipt_message_id = receipt_event_id
             await self.handle_message(msg_event)
 
     @staticmethod
@@ -2610,12 +2621,22 @@ class MatrixAdapter(BasePlatformAdapter):
 
     async def on_processing_start(self, event: MessageEvent) -> None:
         msg_id, room_id = event.message_id, event.source.chat_id
-        if self._reactions_enabled and msg_id and room_id:
+        if self._reactions_enabled and msg_id and room_id and (room_id, msg_id) not in self._pending_reactions:
             reaction_event_id = await self._send_reaction(room_id, msg_id, "\U0001f440")
             if reaction_event_id:
                 self._pending_reactions[(room_id, msg_id)] = reaction_event_id
 
+    def _send_processing_read_receipt(self, event: MessageEvent, outcome: ProcessingOutcome) -> None:
+        room_id = event.source.chat_id
+        receipt_id = event.receipt_message_id
+        if self._read_receipts_mode.should_send_on_completion(outcome) and receipt_id and room_id:
+            self._background_read_receipt(room_id, receipt_id)
+
+    async def on_inline_processing_complete(self, event: MessageEvent, outcome: ProcessingOutcome) -> None:
+        self._send_processing_read_receipt(event, outcome)
+
     async def on_processing_complete(self, event: MessageEvent, outcome: ProcessingOutcome) -> None:
+        self._send_processing_read_receipt(event, outcome)
         msg_id, room_id = event.message_id, event.source.chat_id
         if not self._reactions_enabled or not msg_id or not room_id or outcome == ProcessingOutcome.CANCELLED:
             return

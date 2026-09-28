@@ -56,6 +56,84 @@ class LiveGateway:
 
 
 @dataclass(frozen=True)
+class MatrixFeedbackSettings:
+    read_receipts: str = "immediate"
+    reactions: bool = False
+
+
+@dataclass(frozen=True)
+class GatewayDeliveryProbe:
+    home: Path
+
+    @property
+    def started(self) -> Path:
+        return self.home / "delivery-started"
+
+    @property
+    def release(self) -> Path:
+        return self.home / "delivery-release"
+
+    @property
+    def transcriptions(self) -> Path:
+        return self.home / "transcriptions"
+
+
+_GATEWAY_DELIVERY_PROBE = """
+import asyncio
+import sys
+from pathlib import Path
+from gateway.platforms.base import BasePlatformAdapter
+from tools import transcription_tools
+
+home = Path("/opt/data")
+original_init = BasePlatformAdapter.__init__
+
+def observed_init(self, *args, **kwargs):
+    original_init(self, *args, **kwargs)
+    if self.platform.value != "matrix":
+        return
+    original_send = self.send
+
+    async def gated_send(chat_id, content, reply_to=None, metadata=None):
+        if content.startswith("Completed Matrix turn 1"):
+            (home / "delivery-started").touch()
+            async with asyncio.timeout(15):
+                while not (home / "delivery-release").exists():
+                    await asyncio.sleep(0.01)
+        return await original_send(chat_id, content, reply_to=reply_to, metadata=metadata)
+
+    self.send = gated_send
+
+def transcribe_audio(path, *args):
+    with (home / "transcriptions").open("a", encoding="utf-8") as stream:
+        stream.write(str(path) + "\\n")
+    return {"success": True, "transcript": "Voice correction [in:delivery-voice]"}
+
+BasePlatformAdapter.__init__ = observed_init
+transcription_tools.transcribe_audio = transcribe_audio
+sys.argv = ["hermes", "gateway", "run"]
+from hermes_cli.main import main
+main()
+"""
+
+
+@pytest.fixture
+def gateway_delivery_probe(
+    request: pytest.FixtureRequest, tmp_path: Path
+) -> Iterator[GatewayDeliveryProbe | None]:
+    probe = (
+        GatewayDeliveryProbe(tmp_path / "hermes")
+        if getattr(request, "param", False)
+        else None
+    )
+    try:
+        yield probe
+    finally:
+        if probe is not None and probe.home.exists():
+            probe.release.touch()
+
+
+@dataclass(frozen=True)
 class LinuxNioObserver:
     container: DockerContainer
     account: MatrixAccount
@@ -167,7 +245,7 @@ def synapse(docker_engine: None) -> Iterator[tuple[DockerContainer, str, Network
             entrypoint="/bin/sh",
         ).with_command([
             "-c",
-            "printf '\\nenable_registration: true\\nenable_registration_without_verification: true\\n' >> /data/homeserver.yaml",
+            "printf '\\nenable_registration: true\\nenable_registration_without_verification: true\\nrc_message: {per_second: 100, burst_count: 100}\\n' >> /data/homeserver.yaml",
         ]).with_volume_mapping(volume.name, "/data", "rw") as configure:
             exit_state = configure.get_wrapped_container().wait(timeout=30)
             assert exit_state["StatusCode"] == 0, configure.get_wrapped_container().logs().decode(errors="replace")
@@ -254,21 +332,47 @@ def linux_nio_observer(
 
 
 @pytest.fixture
+def model_responder() -> Callable[[dict], Text]:
+    return lambda _request: Text("Matrix live reply")
+
+
+@pytest.fixture
+def matrix_feedback() -> MatrixFeedbackSettings:
+    return MatrixFeedbackSettings()
+
+
+@pytest.fixture
+def gateway_busy_input_mode() -> str:
+    return "interrupt"
+
+
+@pytest.fixture
 def gateway(
     tmp_path: Path,
     gateway_image: str,
     synapse: tuple[DockerContainer, str, Network],
     live_room: LiveRoom,
+    model_responder: Callable[[dict], Text],
+    matrix_feedback: MatrixFeedbackSettings,
+    gateway_busy_input_mode: str,
+    gateway_delivery_probe: GatewayDeliveryProbe | None,
 ) -> Iterator[LiveGateway]:
     _, _, network = synapse
     room_id = live_room.room_id
     home = tmp_path / "hermes"
     home.mkdir(mode=0o777)
-    with FakeLLMServer([Text("Matrix live reply")], bind_host="0.0.0.0") as model:
+    with FakeLLMServer(model_responder, bind_host="0.0.0.0") as model:
         write_hermes_home(
             home,
             f"http://host.docker.internal:{model.port}/v1",
-            extra_config="platforms:\n  matrix:\n    enabled: true\nupdates:\n  check: false\n",
+            extra_config=(
+                "platforms:\n  matrix:\n    enabled: true\n"
+                f"    read_receipts: {matrix_feedback.read_receipts}\n"
+                f"    reactions: {str(matrix_feedback.reactions).lower()}\n"
+                f"display:\n  busy_input_mode: {gateway_busy_input_mode}\n  busy_text_mode: interrupt\n"
+                "updates:\n  check: false\n"
+                "approvals:\n  mode: manual\n  timeout: 15\n"
+            ),
         )
         with (home / ".env").open("a", encoding="utf-8") as stream:
             stream.write(
@@ -276,10 +380,15 @@ def gateway(
                 f"MATRIX_ACCESS_TOKEN={live_room.bot.access_token}\n"
                 f"MATRIX_ALLOWED_USERS={live_room.observer.user_id}\n"
                 f"MATRIX_HOME_ROOM={room_id}\n"
-                "MATRIX_E2EE_MODE=optional\nMATRIX_REACTIONS=false\nMATRIX_AUTO_THREAD=false\n"
+                "MATRIX_E2EE_MODE=optional\nMATRIX_AUTO_THREAD=false\n"
             )
         home.chmod(0o777)
 
+        command = (
+            ["-c", _GATEWAY_DELIVERY_PROBE]
+            if gateway_delivery_probe is not None
+            else ["-m", "hermes_cli.main", "gateway", "run"]
+        )
         with DockerContainer(
             gateway_image,
             network=network,
@@ -287,7 +396,7 @@ def gateway(
             user="10000:10000",
             working_dir="/opt/hermes",
             extra_hosts={"host.docker.internal": "host-gateway"},
-        ).with_command("-m hermes_cli.main gateway run").with_volume_mapping(home, "/opt/data", "rw") as container:
+        ).with_command(command).with_volume_mapping(home, "/opt/data", "rw") as container:
             def connected() -> bool:
                 output = container.get_wrapped_container().logs().decode(errors="replace")
                 gateway_log = home / "logs" / "gateway.log"

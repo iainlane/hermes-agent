@@ -216,6 +216,7 @@ class GatewayInboundMixin:
             and not getattr(event, "_hermes_startup_restore_replay", False)
         ):
             self._queue_startup_restore_event(event)
+            event._processing_state.defer()
             return None
 
         if is_internal:
@@ -572,6 +573,7 @@ class GatewayInboundMixin:
         adapter = self._delivery_adapter_for(source)
         if adapter:
             merge_pending_message_event(adapter._pending_messages, _quick_key, event, merge_text=merge_text)
+            event._processing_state.defer()
 
     async def _hm_busy_slash_or_photo(
         self, event: "MessageEvent", source: SessionSource, _quick_key: str
@@ -633,27 +635,34 @@ class GatewayInboundMixin:
     def _hm_text_only(event: "MessageEvent") -> bool:
         return event.message_type == MessageType.TEXT and not event.media_urls and not event.media_types
 
-    def _hm_busy_steer(self, event: "MessageEvent", running_agent: Any, _quick_key: str) -> None:
+    def _hm_busy_steer(self: "GatewayRunner", event: "MessageEvent", running_agent: Any, _quick_key: str) -> None:
         """Steer mode: inject text mid-run via ``agent.steer()``, else fall back to queue semantics."""
         steer_text = (event.text or "").strip()
         steered = False
-        if self._hm_text_only(event) and steer_text and hasattr(running_agent, "steer"):
+        if (
+            self._hm_text_only(event) and steer_text and hasattr(running_agent, "steer")
+            and not self._running_turn_finished(_quick_key)
+        ):
             try:
-                steered = self._steer_running_agent(running_agent, self._steer_text_with_origin(steer_text, event))
+                input_text = self._steer_text_with_origin(steer_text, event)
+                steered = self._steer_running_agent(running_agent, input_text)
             except Exception as exc:
                 logger.warning("PRIORITY steer failed for session %s: %s", _quick_key, exc)
         if steered:
-            self._fold_into_running_turn(running_agent, _quick_key, event)
+            self._fold_into_running_turn(running_agent, _quick_key, event, input_text=input_text)
             logger.debug("PRIORITY steer for session %s", _quick_key)
             return
         logger.debug("PRIORITY steer-fallback-to-queue for session %s", _quick_key)
         self._queue_or_replace_pending_event(_quick_key, event)
 
     async def _hm_busy_interrupt(
-        self, event: "MessageEvent", source: SessionSource, running_agent: Any, _quick_key: str
+        self: "GatewayRunner", event: "MessageEvent", source: SessionSource, running_agent: Any, _quick_key: str
     ) -> None:
         """Interrupt path: redirect text-only corrections when supported, else ``agent.interrupt()``."""
         from gateway.run import _build_media_placeholder
+        if self._running_turn_finished(_quick_key):
+            self._queue_or_replace_pending_event(_quick_key, event)
+            return
         # Text-only corrections redirect the live turn (preserving displayed context) when the
         # runtime supports it; media/voice and older runtimes use the interrupt path below.
         _can_redirect = getattr(running_agent, "_supports_active_turn_redirect", False) is True
@@ -670,12 +679,15 @@ class GatewayInboundMixin:
             )
         elif not _interrupt_text and getattr(event, "media_urls", None):
             _interrupt_text = _build_media_placeholder(event)
+        if self._running_turn_finished(_quick_key):
+            self._queue_or_replace_pending_event(_quick_key, event)
+            return
         # Delivered via adapter._pending_messages (read by _run_agent); never also buffered on self
         # — that copy was never consumed and grew unbounded.
         running_agent.interrupt(_interrupt_text)
 
     async def _hm_handle_running_session_message(
-        self, event: "MessageEvent", source: SessionSource, _quick_key: str
+        self: "GatewayRunner", event: "MessageEvent", source: SessionSource, _quick_key: str
     ) -> Optional[str]:
         """Fast-path while this session's agent is running: interrupt by default (minimal latency);
         busy_input_mode queue/steer, subagent and compression protection demote to queue."""
@@ -706,6 +718,7 @@ class GatewayInboundMixin:
                 if queue_during_drain
                 else f"⏳ Gateway is {self._status_action_gerund()} and is not accepting another turn right now."
             )
+        event._processing_state.defer()
         if effective_busy_input_mode == "queue":
             logger.debug("PRIORITY queue follow-up for session %s", _quick_key)
             self._queue_or_replace_pending_event(_quick_key, event)
@@ -1273,7 +1286,7 @@ class GatewayInboundMixin:
             logger.debug("FIFO orphan rescue pre-claim failed for %s", _quick_key, exc_info=True)
             return event, source, is_internal
 
-    async def _handle_message(self, event: MessageEvent) -> Optional[str]:
+    async def _handle_message(self: "GatewayRunner", event: MessageEvent) -> Optional[str]:
         """Handle an incoming message from any platform: auth → command check → running-agent
         interrupt → get/create session → build context → run agent → return response."""
         from gateway.run import _AGENT_PENDING_SENTINEL
@@ -1343,7 +1356,7 @@ class GatewayInboundMixin:
         if _active_session_lease is not None:
             _claim_state.turn.lease = _active_session_lease
         _claim_state.turn.agent = _AGENT_PENDING_SENTINEL
-        _claim_state.turn.event = event
+        _claim_state.turn.event = _claim_state.turn.processing_event = event
         _claim_state.turn.started_ts = time.time()
         self._persist_active_agents()
         _run_generation = self._begin_session_run_generation(_quick_key)
@@ -1716,8 +1729,8 @@ class GatewayInboundMixin:
         follow-up paths so attribution, image enrichment, STT, document notes, reply context and
         @ references behave the same. Side effect: buffers per-session native image paths when the
         model supports native vision; the caller consumes that buffer at ``run_conversation``."""
-        _pending_stt_prepared = hasattr(event, "_gateway_pending_stt_text")
-        message_text = (event._gateway_pending_stt_text if _pending_stt_prepared else event.text) or ""
+        _pending_stt_prepared = event._voice_preparation.text is not None
+        message_text = (event._voice_preparation.text if _pending_stt_prepared else event.text) or ""
         # Prefer the caller's resolved session key so this write key matches the consume key at the
         # run_conversation site; derive it here only for tests and legacy standalone callers.
         session_key = session_key or self._session_key_for_source(source)
@@ -2164,15 +2177,16 @@ class GatewayInboundMixin:
     ) -> tuple[str | None, List[str]]:
         """Transcribe a pending audio event once and cache the result on the event: the interrupt
         monitor and the pending-drain path both need it — one STT call and one echo per message."""
-        if hasattr(event, "_gateway_pending_stt_text"):
-            return event._gateway_pending_stt_text, list(getattr(event, "_gateway_pending_stt_transcripts", []) or [])
+        prepared = event._voice_preparation
+        if prepared.text is not None:
+            return prepared.text, list(prepared.transcripts)
         audio_paths = self._pending_event_audio_paths(event)
         if not audio_paths:
             return user_text if user_text is not None else (getattr(event, "text", None) or None), []
         text = user_text if user_text is not None else (getattr(event, "text", "") or "")
         enriched_text, successful_transcripts = await self._enrich_message_with_transcription(text, audio_paths)
-        event._gateway_pending_stt_text = enriched_text
-        event._gateway_pending_stt_transcripts = list(successful_transcripts)
+        prepared.text = enriched_text
+        prepared.transcripts = list(successful_transcripts)
         return enriched_text, successful_transcripts
 
     async def _echo_pending_stt_transcripts_once(
@@ -2185,8 +2199,9 @@ class GatewayInboundMixin:
         as a prefix, so only the unsent tail is echoed."""
         if not transcripts or not self._should_echo_stt_transcripts() or adapter is None:
             return
-        already_echoed = int(getattr(event, "_gateway_pending_stt_echoed", 0) or 0)
-        event._gateway_pending_stt_echoed = max(already_echoed, len(transcripts))
+        prepared = event._voice_preparation
+        already_echoed = prepared.echoed
+        prepared.echoed = max(already_echoed, len(transcripts))
         await self._echo_stt_transcripts(
             adapter, source, transcripts[already_echoed:], metadata=metadata, log_context=log_context,
         )

@@ -7,9 +7,12 @@ gateway.platforms.*.
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from gateway.session import SessionSource
+
+if TYPE_CHECKING:
+    from gateway.platforms.base import BasePlatformAdapter
 
 
 class MessageType(Enum):
@@ -30,6 +33,90 @@ class ProcessingOutcome(Enum):
     SUCCESS = "success"
     FAILURE = "failure"
     CANCELLED = "cancelled"
+
+    @classmethod
+    def from_agent_result(cls, result: Dict[str, Any]) -> "ProcessingOutcome":
+        """Classify a returned agent result before reply delivery."""
+        if result.get("interrupted"):
+            return cls.CANCELLED
+        if result.get("failed"):
+            return cls.FAILURE
+        return cls.SUCCESS
+
+
+class _ProcessingPhase(Enum):
+    PENDING = "pending"
+    DEFERRED = "deferred"
+    RUNNING = "running"
+    COMPLETED = "completed"
+
+
+@dataclass
+class _ProcessingInput:
+    event: "MessageEvent"
+    text: Optional[str]
+
+
+@dataclass
+class _ProcessingCompletion:
+    adapter: "BasePlatformAdapter"
+    event: "MessageEvent"
+
+
+@dataclass
+class _VoicePreparation:
+    text: Optional[str] = None
+    transcripts: List[str] = field(default_factory=list)
+    echoed: int = 0
+
+
+@dataclass
+class _ProcessingState:
+    phase: _ProcessingPhase = _ProcessingPhase.PENDING
+    outcome: Optional[ProcessingOutcome] = None
+    receipt_message_id: Optional[str] = None
+    consumed_receipt_message_id: Optional[str] = None
+    receipt_inputs: List[_ProcessingInput] = field(default_factory=list)
+    pending_completion: Optional[_ProcessingCompletion] = None
+
+    def defer(self) -> None:
+        self.phase = _ProcessingPhase.DEFERRED
+
+    def take_pending_input(self, pending_text: str) -> Optional["MessageEvent"]:
+        pending_indices: set[int] = set()
+        remaining = pending_text
+        # A later correction can quote an earlier input's complete payload.
+        for index in range(len(self.receipt_inputs) - 1, -1, -1):
+            text = self.receipt_inputs[index].text
+            if text is not None and text in remaining:
+                pending_indices.add(index)
+                remaining = remaining.replace(text, "", 1)
+        pending_input = None
+        for index, incoming in enumerate(self.receipt_inputs):
+            if index in pending_indices:
+                pending_input = incoming.event
+                continue
+            self.consumed_receipt_message_id = incoming.event.receipt_message_id
+        self.receipt_inputs.clear()
+        self.receipt_message_id = self.consumed_receipt_message_id
+        return pending_input
+
+    def start(self) -> None:
+        self.phase = _ProcessingPhase.RUNNING
+        self.outcome = None
+        self.consumed_receipt_message_id = self.receipt_message_id
+        self.receipt_inputs.clear()
+
+    def complete(self) -> bool:
+        if self.phase in {_ProcessingPhase.DEFERRED, _ProcessingPhase.COMPLETED}:
+            return False
+        self.phase = _ProcessingPhase.COMPLETED
+        return True
+
+    def complete_inline(self) -> bool:
+        if self.phase is not _ProcessingPhase.PENDING:
+            return False
+        return self.complete()
 
 
 @dataclass
@@ -93,6 +180,9 @@ class MessageEvent:
     # fallback, like True.
     reply_expected: Optional[bool] = None
     reply_to_author_authorized: Optional[bool] = None
+    # dataclasses.replace shares this mutable state with the adapter's original event.
+    _processing_state: _ProcessingState = field(default_factory=_ProcessingState, repr=False, compare=False)
+    _voice_preparation: _VoicePreparation = field(default_factory=_VoicePreparation, repr=False, compare=False)
 
     # Process-local admission receipt, never routing metadata or execution acknowledgement.
     _gateway_accepted: bool = field(default=False, init=False, repr=False, compare=False)
@@ -119,6 +209,17 @@ class MessageEvent:
         self.reply_to_author_name = other.reply_to_author_name
         self.reply_to_is_own_message = other.reply_to_is_own_message
         self.reply_to_author_authorized = other.reply_to_author_authorized
+    def absorb_turn_input(self, other: "MessageEvent", *, input_text: Optional[str] = None) -> None:
+        self.absorb_reply_expected(other)
+        receipt_id = other.receipt_message_id
+        if receipt_id:
+            self._processing_state.receipt_message_id = receipt_id
+            if self._processing_state is not other._processing_state:
+                self._processing_state.receipt_inputs.append(_ProcessingInput(other, input_text))
+
+    @property
+    def receipt_message_id(self) -> Optional[str]:
+        return self._processing_state.receipt_message_id or self.message_id
 
     def is_command(self) -> bool:
         """Check if this is a command message (e.g., /new, /reset)."""

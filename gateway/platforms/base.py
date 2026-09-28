@@ -1767,23 +1767,22 @@ def merge_pending_message_event(pending_messages: Dict[str, MessageEvent], sessi
             if event.text:
                 existing.text = BasePlatformAdapter._merge_caption(existing.text, event.text)
             existing.append_channel_context(event.channel_context)
-            existing.absorb_reply_expected(event)
+            existing.absorb_turn_input(event)
             if existing_is_photo or incoming_is_photo:
                 existing.message_type = MessageType.PHOTO
             elif existing_type == MessageType.TEXT and event.message_type != MessageType.TEXT:
                 existing.message_type = event.message_type
             # Drop the *derived* STT cache (event changed); the echo ledger must survive or
             # notes echo twice.
-            for attr in ("_gateway_pending_stt_text", "_gateway_pending_stt_transcripts"):
-                if hasattr(existing, attr):
-                    delattr(existing, attr)
+            existing._voice_preparation.text = None
+            existing._voice_preparation.transcripts.clear()
             return
         both_text = existing_type == MessageType.TEXT and event.message_type == MessageType.TEXT
         if merge_text and both_text:
             if event.text:
                 existing.text = _append_text(existing.text, event.text)
             existing.append_channel_context(event.channel_context)
-            existing.absorb_reply_expected(event)
+            existing.absorb_turn_input(event)
             return
     pending_messages[session_key] = event
 
@@ -2525,7 +2524,7 @@ class BasePlatformAdapter(ABC):
                 existing.media_types.extend(event.media_types)
             existing.append_channel_context(event.channel_context)
             existing.absorb_reply_context(event)
-            existing.absorb_reply_expected(event)
+            existing.absorb_turn_input(event)
         existing._last_chunk_len = len(event.text or "")  # type: ignore[attr-defined]
         prior_task = self._pending_text_batch_tasks.get(key)
         if prior_task and not prior_task.done():
@@ -3477,11 +3476,30 @@ class BasePlatformAdapter(ABC):
         if emoji:
             await add(chat_id, message_id, emoji)
 
+    async def on_inline_processing_complete(self, event: MessageEvent, outcome: ProcessingOutcome) -> None:
+        """Acknowledge an inline command without changing the active turn's lifecycle."""
+
     async def _run_processing_hook(self, hook_name: str, *args: Any, **kwargs: Any) -> None:
         """Run a lifecycle hook without letting failures break message flow."""
         hook = getattr(self, hook_name, None)
         if not callable(hook):
             return
+        event = args[0] if args else None
+        if isinstance(event, MessageEvent):
+            if hook_name == "on_processing_complete":
+                completion = event._processing_state.pending_completion
+                if completion is not None:
+                    event._processing_state.pending_completion = None
+                    await completion.adapter._run_processing_hook(
+                        hook_name, completion.event, *args[1:], **kwargs)
+            if hook_name == "on_processing_start":
+                event._processing_state.start()
+            elif hook_name == "on_processing_complete":
+                if not event._processing_state.complete():
+                    return
+            elif hook_name == "on_inline_processing_complete":
+                if not event._processing_state.complete_inline():
+                    return
         try:
             await hook(*args, **kwargs)
         except Exception as e:
@@ -3531,6 +3549,7 @@ class BasePlatformAdapter(ABC):
         response = await self._message_handler(event)
         text, eph_ttl = self._unwrap_ephemeral(response)
         if not text:
+            await self._run_processing_hook("on_inline_processing_complete", event, ProcessingOutcome.SUCCESS)
             return
         if log_cmd is not None:
             logger.info("[%s] Sending command '/%s' response (%d chars) to %s", self.name, log_cmd,
@@ -3540,6 +3559,9 @@ class BasePlatformAdapter(ABC):
             metadata=_mark_notify_metadata(thread_meta))
         if eph_ttl > 0 and result.success and result.message_id:
             self._schedule_ephemeral_delete(event.source.chat_id, result.message_id, eph_ttl)
+        await self._run_processing_hook(
+            "on_inline_processing_complete", event,
+            ProcessingOutcome.SUCCESS if result.success else ProcessingOutcome.FAILURE)
 
     def _media_delivery_scope(self, source: Optional[SessionSource]):
         """Routed home + terminal policy for post-handler text, media and error delivery;
@@ -3796,7 +3818,7 @@ class BasePlatformAdapter(ABC):
             if event.text:
                 state.event.text = _append_text(state.event.text, event.text)
             state.event.append_channel_context(event.channel_context)
-            state.event.absorb_reply_expected(event)
+            state.event.absorb_turn_input(event)
             latest_message_id = getattr(event, "message_id", None)
             latest_anchor = latest_message_id or getattr(event, "reply_to_message_id", None)
             if latest_message_id is not None:
@@ -4028,6 +4050,7 @@ class BasePlatformAdapter(ABC):
                                  self.name, cmd, session_key)
                     await self._dispatch_inline_reply(event)
             except Exception as e:
+                await self._run_processing_hook("on_inline_processing_complete", event, ProcessingOutcome.FAILURE)
                 logger.error("[%s] Command '/%s' dispatch failed: %s", self.name, cmd, e, exc_info=True)
             return
         # Clarify bypass: while blocked on clarify_tool the next message must reach the
@@ -4048,6 +4071,7 @@ class BasePlatformAdapter(ABC):
                 try:
                     await self._dispatch_inline_reply(event)
                 except Exception as e:
+                    await self._run_processing_hook("on_inline_processing_complete", event, ProcessingOutcome.FAILURE)
                     logger.error("[%s] Clarify text-intercept dispatch failed: %s", self.name, e, exc_info=True)
                 return
         if self._busy_session_handler is not None:
@@ -4544,13 +4568,15 @@ class BasePlatformAdapter(ABC):
                     record_delivery=_record_delivery)
             await self._release_turn_marker(event)
             processing_ok = delivery_succeeded if delivery_attempted else not bool(response)
+            outcome = event._processing_state.outcome or ProcessingOutcome.SUCCESS
+            if outcome == ProcessingOutcome.SUCCESS and not processing_ok:
+                outcome = ProcessingOutcome.FAILURE
             # Clean up the per-turn streaming-TTS flag.
             self._streaming_tts_completed_turns.discard(self._streaming_tts_turn_key(
                 session_key, getattr(interrupt_event, "_hermes_run_generation", None),
                 event=event) or "")
             await self._run_processing_hook(
-                "on_processing_complete", event,
-                ProcessingOutcome.SUCCESS if processing_ok else ProcessingOutcome.FAILURE)
+                "on_processing_complete", event, outcome)
             # Force-flush an unfired debounce timer so this task hands off to a fresh drain task.
             # Clear the Event BEFORE the stop-typing await so concurrent inbound sees a live guard.
             await self._flush_text_debounce_now(session_key)

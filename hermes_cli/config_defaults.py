@@ -1630,6 +1630,8 @@ DEFAULT_CONFIG = {
         "free_response_rooms": "",  # comma-separated room IDs answered without mention
         "allowed_rooms": "",  # if set, ONLY respond in these room IDs (whitelist)
         "thread_backfill_limit": 20,
+        "read_receipts": "immediate",  # immediate | after_processing | disabled
+        "reactions": True,  # processing reactions; approval and picker controls are independent
     },
     # Approvals for dangerous commands.
     # mode: manual (always prompt) | smart (aux LLM auto-approves low-risk) | off (= --yolo)
