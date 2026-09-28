@@ -31,11 +31,12 @@ from gateway.session import (
     neutralize_untrusted_inline_text,
 )
 from gateway.turn_lease import TurnLeaseTimeoutError
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 if TYPE_CHECKING:  # string annotations only; never imported at runtime (cycle)
     from gateway.run import GatewayRunner  # noqa: F401
     from gateway.run_turn_runner import TurnRunner  # noqa: F401
+    from gateway.session_state import SessionState
 
 # Log-record parity with the origin module.
 logger = logging.getLogger("gateway.run")
@@ -64,6 +65,8 @@ def strip_discord_triggering_note(event: Any, message_text: Any) -> Any:
 
 class GatewayInboundMixin:
     """Inbound message pipeline (_handle_message, text/media preparation, durable-turn markers, plugin injection) for GatewayRunner."""
+
+    _peek_session_state: Callable[[str], Optional[SessionState]]
 
     async def _hm_pre_gateway_dispatch_hook(
         self, event: "MessageEvent", source: SessionSource
@@ -1724,22 +1727,38 @@ class GatewayInboundMixin:
         # Reset only this session's per-call buffer; other sessions may be concurrently preparing.
         self._consume_pending_native_image_paths(session_key)
 
+        adapter = self._intake_adapter_for(source)
+        context_snapshot = None
+        fetch_inbound_context = getattr(type(adapter), "fetch_inbound_context", None)
+        if callable(fetch_inbound_context):
+            context_snapshot = await fetch_inbound_context(adapter, event, include_thread_history=not history)
+        mention_context = None
+        fetch_mention_context = getattr(type(adapter), "fetch_mention_context", None)
+        if context_snapshot is None and callable(fetch_mention_context):
+            try:
+                mention_context = await fetch_mention_context(adapter, event)
+            except Exception as exc:
+                logger.debug("Matrix mention context fetch failed: %s", exc)
+
         thread_context = None
         if (
-            not history and not event.internal and source.platform == Platform.MATRIX and source.thread_id
+            context_snapshot is None and not history and not event.internal and not mention_context
+            and source.platform == Platform.MATRIX and source.thread_id
             and source.thread_id != event.message_id
         ):
-            adapter = self._intake_adapter_for(source)
             if adapter is not None and hasattr(adapter, "fetch_thread_context"):
                 try:
                     thread_context = await adapter.fetch_thread_context(
-                        source.chat_id, source.thread_id, exclude_event_id=event.message_id,
+                        source.chat_id, source.thread_id, before_event_id=event.message_id,
                     )
                 except Exception as exc:
                     logger.debug("Matrix thread context fetch failed: %s", exc)
 
         message_text = self._prefix_inbound_sender_context(event, source, message_text)
-        image_paths, audio_paths, audio_file_paths, video_paths = self._classify_inbound_media(event, _pending_stt_prepared)
+        media_event = event
+        if context_snapshot is not None and event._quoted_media_dependencies:
+            media_event = event.authored_media()
+        image_paths, audio_paths, audio_file_paths, video_paths = self._classify_inbound_media(media_event, _pending_stt_prepared)
         if image_paths:
             message_text = await self._enrich_inbound_images(source, session_key, message_text, image_paths)
         if audio_paths:
@@ -1753,10 +1772,14 @@ class GatewayInboundMixin:
         # Earlier thread messages are external text; append them after @ reference expansion.
         if thread_context:
             message_text = f"{thread_context}\n\n{message_text}"
+        if mention_context:
+            message_text = f"{mention_context}\n\n[New message]\n{message_text}"
         # After expansion: the quoted reply is someone else's text and stays literal — an
         # ``@file:`` inside it must never read a local file on the replier's behalf.
-        message_text = self._prepend_inbound_reply_context(event, source, message_text)
+        if context_snapshot is None:
+            message_text = self._prepend_inbound_reply_context(event, source, message_text)
         adapter = self._intake_adapter_for(source)
+        context = None
         take_channel_context = getattr(type(adapter), "take_turn_channel_context", None)
         if callable(take_channel_context):
             entry = getattr(getattr(self, "session_store", None), "_entries", {}).get(session_key)
@@ -1788,8 +1811,31 @@ class GatewayInboundMixin:
                 event._matrix_room_state = current.to_dict()
             else:
                 context = take_channel_context(adapter, event, session_key, created_at)
-            if context:
+            if context and context_snapshot is None:
                 message_text = f"{context}\n\n[New message]\n{message_text}"
+        if context_snapshot is not None:
+            from gateway.inbound_context import PreparedInboundMessage, QuotedImageEnrichment
+
+            await context_snapshot.refresh()
+            prepared = PreparedInboundMessage(context_snapshot, event, message_text, context)
+            quoted_images = context_snapshot.reply_image_paths()
+            if quoted_images:
+                native_images = self._consume_pending_native_image_paths(session_key)
+                enrichments = []
+                for path in quoted_images:
+                    text = await self._enrich_inbound_images(source, session_key, "", [path])
+                    enrichments.append(QuotedImageEnrichment(path, text))
+                    native_images.extend(self._consume_pending_native_image_paths(session_key))
+                prepared.quoted_images = tuple(enrichments)
+                state = self._peek_session_state(session_key)
+                if state is not None:
+                    state.persistent.native_image_paths = list(dict.fromkeys(native_images))
+                await context_snapshot.refresh()
+            event._prepared_inbound = prepared
+            message_text = prepared.render(self)
+            state = self._peek_session_state(session_key)
+            if state is not None:
+                state.persistent.native_image_paths = prepared.retained_image_paths(state.persistent.native_image_paths or [])
         return message_text
 
     async def _prepare_profile_scoped_inbound_message_text(
@@ -1813,7 +1859,9 @@ class GatewayInboundMixin:
 
     def _consume_pending_native_image_paths(self, session_key: str) -> List[str]:
         state = self._peek_session_state(session_key)
-        paths = list(state.persistent.native_image_paths or []) if state is not None else []
+        if state is None:
+            return []
+        paths = list(state.persistent.native_image_paths or [])
         if paths:
             state.persistent.native_image_paths = []
         return paths

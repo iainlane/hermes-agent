@@ -103,8 +103,16 @@ matrix:
   auto_thread: true               # Auto-create threads for responses (default: true)
   dm_mention_threads: false       # Create thread when @mentioned in DM (default: false)
   max_message_length: 16000       # Outbound chunk size in chars (default: 16000, max: 65535)
-  thread_backfill_limit: 20       # Prior thread messages to fetch for a new session (0 disables)
+  room_backfill_limit: 20         # Earlier room events to scan on a mention (0 disables)
+  thread_backfill_limit: 20       # Earlier thread events to scan (0 disables)
 ```
+
+In shared rooms, an admitted @mention includes earlier room messages or messages from
+its Matrix thread. Each limit bounds the number of events scanned. Thread messages
+stay within their thread; room catch-up excludes thread replies. Set either limit
+to `0` to disable that catch-up source. Catch-up also shows recent reactions to
+the included messages. Redacted reactions are excluded. Ordinary reactions do
+not start an agent turn.
 
 Or via environment variables:
 
@@ -418,7 +426,10 @@ When E2EE is enabled, Hermes:
 
 ### Matrix Tools and Controls
 
-Hermes does not expose Matrix-specific agent tools (such as room creation, invites, or redaction) — the agent interacts with Matrix through normal message delivery. The adapter uses reactions and redactions internally to power approval prompts and pickers.
+The Matrix session includes `matrix_read` for bounded room, thread and event
+reads. These reads show reactions with their sender and target event. The
+adapter also uses reactions and redactions for approval prompts and pickers.
+Room creation, invites and redaction are not available as agent actions.
 
 If `MATRIX_ALLOWED_ROOMS` is set, Hermes only responds in those rooms and in private bot chats with exactly two joined users, including the bot.
 
