@@ -34,8 +34,14 @@ class MatrixContextMixin:
     ) -> InboundContextSnapshot:
         from plugins.platforms.matrix.rich_content import MatrixRichContentSnapshot
 
-        if isinstance(event.raw_message, dict) and event.raw_message.get("msgtype") in {"m.emote", "m.sticker"}:
-            return await MatrixRichContentSnapshot.prepare(self, event, include_thread_history=include_thread_history)
+        if any(
+            isinstance(dependency, MatrixRichContentSnapshot)
+            and dependency.context.adapter is self
+            for dependency in event._inbound_context_dependencies
+        ):
+            return await MatrixRichContentSnapshot.prepare(
+                self, event, include_thread_history=include_thread_history
+            )
         return await MatrixTurnContext.prepare(
             self, event, include_thread_history=include_thread_history
         )

@@ -139,14 +139,17 @@ class MessageEvent:
         self.reply_to_author_name = other.reply_to_author_name
         self.reply_to_is_own_message = other.reply_to_is_own_message
         self.reply_to_author_authorized = other.reply_to_author_authorized
-        self._inbound_context_dependencies += other._inbound_context_dependencies
+        self.absorb_context_dependencies(other)
 
-    def absorb_media(self, other: "MessageEvent") -> None:
-        """Append attachments with their inline flags and quoted-event dependencies."""
+    def absorb_context_dependencies(self, other: "MessageEvent") -> None:
         self._inbound_context_dependencies += tuple(
             dependency for dependency in other._inbound_context_dependencies
             if all(dependency is not existing for existing in self._inbound_context_dependencies)
         )
+
+    def absorb_media(self, other: "MessageEvent") -> None:
+        """Append attachments with their inline flags and quoted-event dependencies."""
+        self.absorb_context_dependencies(other)
         offset = len(self.media_urls)
         self.media_text_inlined = [
             *self.media_text_inlined,
