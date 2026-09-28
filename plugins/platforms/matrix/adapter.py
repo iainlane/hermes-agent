@@ -8,7 +8,7 @@ Env vars (config.yaml ``matrix:`` keys alias several — env wins):
   MATRIX_ALLOWED_USERS, MATRIX_ALLOWED_ROOMS (whitelist; DMs exempt), MATRIX_IGNORE_USER_PATTERNS
   (regexes for bridge ghosts), MATRIX_HOME_ROOM (cron delivery), MATRIX_REACTIONS (default true);
   MATRIX_REQUIRE_MENTION (default true), MATRIX_THREAD_REQUIRE_MENTION, MATRIX_FREE_RESPONSE_ROOMS,
-  MATRIX_PROCESS_NOTICES, MATRIX_PROCESS_EDITS, MATRIX_ALLOW_ROOM_MENTIONS, MATRIX_ALLOW_PUBLIC_ROOMS (all default false);
+  MATRIX_PROCESS_NOTICES, MATRIX_ALLOW_ROOM_MENTIONS, MATRIX_ALLOW_PUBLIC_ROOMS (all default false);
   MATRIX_AUTO_THREAD (default true), MATRIX_DM_AUTO_THREAD, MATRIX_DM_MENTION_THREADS,
   MATRIX_SESSION_SCOPE auto|room|thread; MATRIX_MAX_MESSAGE_LENGTH (default 16000),
   MATRIX_MAX_MEDIA_BYTES, MATRIX_ROOM_IDENTITY_TTL_SECONDS; MATRIX_APPROVAL_REQUIRE_SENDER (default
@@ -131,6 +131,7 @@ from plugins.platforms.matrix.pending_replay import MatrixPendingReplayMixin
 from plugins.platforms.matrix.intake_mixin import MatrixIntakeMixin
 from plugins.platforms.matrix.adapter_media import MatrixMediaMixin
 from plugins.platforms.matrix.inbound_events import MatrixInboundEventMixin
+from plugins.platforms.matrix.edit_followups import MatrixEditFollowupsMixin, edit_followup_rooms
 from plugins.platforms.matrix.turn_context import MatrixTurnContextUpdate
 from plugins.platforms.matrix.reply_context import (
     MatrixEventContext, MatrixEventContextCache, MatrixReplyContext, extract_mx_reply_quote, _label_body,
@@ -717,7 +718,7 @@ from plugins.platforms.matrix.delivery import MatrixDeliveryMixin
 from plugins.platforms.matrix.feedback import MatrixFeedbackMixin
 
 
-class MatrixAdapter(MatrixFeedbackMixin, MatrixDeliveryMixin, MatrixInboundEventMixin, MatrixMediaMixin, MatrixInvitesMixin, MatrixPendingReplayMixin, MatrixIntakeMixin, MatrixRedactionMixin, MatrixFollowupMixin, MatrixRichContentMixin, MatrixContextMixin, BasePlatformAdapter):
+class MatrixAdapter(MatrixEditFollowupsMixin, MatrixFeedbackMixin, MatrixDeliveryMixin, MatrixInboundEventMixin, MatrixMediaMixin, MatrixInvitesMixin, MatrixPendingReplayMixin, MatrixIntakeMixin, MatrixRedactionMixin, MatrixFollowupMixin, MatrixRichContentMixin, MatrixContextMixin, BasePlatformAdapter):
     """Gateway adapter for Matrix (any homeserver)."""
 
     supports_code_blocks = True  # Matrix renders fenced code blocks (HTML/markdown)
@@ -825,7 +826,7 @@ class MatrixAdapter(MatrixFeedbackMixin, MatrixDeliveryMixin, MatrixInboundEvent
         raw_session_scope = str(_extra_or_secret(config.extra, "session_scope", "MATRIX_SESSION_SCOPE", "auto")).strip().lower()
         self._matrix_session_scope = raw_session_scope if raw_session_scope in {"auto", "room", "thread"} else "auto"
         self._process_notices: bool = self._extra_truthy(config, "process_notices", "MATRIX_PROCESS_NOTICES", "false")
-        self._process_edits: bool = self._parse_process_edits(config)
+        self._process_edits = edit_followup_rooms(config)
 
         feedback = MatrixFeedbackPolicy.from_config(config)
         self._reactions_enabled: bool = feedback.reactions
@@ -1402,7 +1403,7 @@ class MatrixAdapter(MatrixFeedbackMixin, MatrixDeliveryMixin, MatrixInboundEvent
                 "ignored_user_pattern_count": len(self._ignored_user_patterns),
                 "require_mention": self._require_mention, "free_response_room_count": len(self._free_rooms),
                 "allow_room_mentions": self._allow_room_mentions, "process_notices": self._process_notices,
-                "process_edits": self._process_edits,
+                "process_edits": sorted(self._process_edits),
                 "allow_public_rooms": _env_truthy("MATRIX_ALLOW_PUBLIC_ROOMS")},
             "media": {"max_media_bytes": self._max_media_bytes}}
 
