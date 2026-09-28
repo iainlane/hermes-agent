@@ -10,7 +10,9 @@ from urllib.parse import quote
 
 from gateway.session_context import get_session_env, get_session_transport
 from hermes_constants import hermes_home_key
-from plugins.platforms.matrix.read_context import MatrixReadEvent, Method, _read_access, _raw_event, _visible_event
+from plugins.platforms.matrix.read_context import (
+    MatrixReadEvent, Method, _current_read_access, _read_access, _raw_event, _visible_event,
+)
 from plugins.platforms.matrix.reply_context import MatrixEventContext, MatrixEventContextCache
 
 
@@ -190,6 +192,11 @@ class _InspectionOwner:
             _read_access(self.adapter, room_id, requester), timeout=10.0,
         )
         self.check(room_id, requester)
+        if error is None:
+            assert current_chat_type is not None
+            client, current_chat_type, error = _current_read_access(
+                self.adapter, room_id, requester, current_chat_type,
+            )
         if error is not None:
             raise _InspectionRejected(error)
         if client is not self.client or (chat_type is not None and current_chat_type != chat_type):

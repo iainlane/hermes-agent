@@ -4,12 +4,21 @@ import asyncio
 import gc
 import json
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
 
+from plugins.platforms.matrix.adapter import MatrixAdapter
 from plugins.platforms.matrix.room_inspection import inspect_matrix_room
 from plugins.platforms.matrix.reply_context import MatrixEventContext, MatrixEventContextCache
+
+
+def _inspection_adapter(**attributes: Any) -> MatrixAdapter:
+    adapter = object.__new__(MatrixAdapter)
+    adapter._allowed_room_ids = set()
+    vars(adapter).update(attributes)
+    return adapter
 
 
 @pytest.mark.asyncio
@@ -51,7 +60,7 @@ async def test_room_inspection_reports_state_members_permissions_and_pins():
         api=SimpleNamespace(request=AsyncMock(side_effect=request)),
         get_event=AsyncMock(side_effect=get_event), crypto=None,
     )
-    adapter = SimpleNamespace(
+    adapter = _inspection_adapter(
         _event_context_cache=MatrixEventContextCache(),
         _client=client, _joined_rooms={"!room:server"}, _user_id="@bot:server",
         _is_allowed_matrix_room_event=AsyncMock(return_value=True),
@@ -88,7 +97,7 @@ async def test_room_inspection_reports_state_members_permissions_and_pins():
 @pytest.mark.asyncio
 async def test_room_inspection_rejects_unauthorized_requester_before_network():
     client = SimpleNamespace(get_state_event=AsyncMock(), get_joined_members=AsyncMock())
-    adapter = SimpleNamespace(
+    adapter = _inspection_adapter(
         _client=client, _joined_rooms={"!room:server"}, _user_id="@bot:server",
         _is_allowed_matrix_room_event=AsyncMock(return_value=True),
         _is_dm_room=AsyncMock(return_value=False),
@@ -113,7 +122,7 @@ async def test_room_permissions_include_version_12_creator_override():
         return {"users_default": 0, "state_default": 50,
                 "events": {"m.room.pinned_events": 75, "m.room.encrypted": 25}}
 
-    adapter = SimpleNamespace(
+    adapter = _inspection_adapter(
         _client=SimpleNamespace(get_state_event=AsyncMock(side_effect=get_state_event)),
         _joined_rooms={"!room:server"}, _user_id="@bot:server",
         _is_allowed_matrix_room_event=AsyncMock(return_value=True),
@@ -157,7 +166,7 @@ async def test_old_room_power_levels_accept_numeric_strings():
             return {}
         return power
 
-    adapter = SimpleNamespace(
+    adapter = _inspection_adapter(
         _client=SimpleNamespace(get_state_event=AsyncMock(side_effect=get_state_event)),
         _joined_rooms={"!room:server"}, _user_id="@bot:server",
         _is_allowed_matrix_room_event=AsyncMock(return_value=True),
@@ -190,7 +199,7 @@ async def test_version_12_ignores_legacy_creator_property():
             return {}
         return {"users_default": 0, "events": {"m.room.pinned_events": 75}}
 
-    adapter = SimpleNamespace(
+    adapter = _inspection_adapter(
         _client=SimpleNamespace(get_state_event=AsyncMock(side_effect=get_state_event)),
         _joined_rooms={"!room:server"}, _user_id="@bot:server",
         _is_allowed_matrix_room_event=AsyncMock(return_value=True),
@@ -284,7 +293,7 @@ async def test_pin_snapshots_expose_effective_state_after_sibling_await(state: s
         crypto=SimpleNamespace(decrypt_megolm_event=decrypt, crypto_store=store),
     )
     cache = MatrixEventContextCache(max_entries=1)
-    adapter = SimpleNamespace(
+    adapter = _inspection_adapter(
         _client=client, _event_context_cache=cache, _joined_rooms={room}, _user_id="@bot:server",
         _is_allowed_matrix_room_event=AsyncMock(return_value=True), _is_dm_room=AsyncMock(return_value=False),
         _is_sender_authorized=lambda *_args, **_kwargs: True,
@@ -385,7 +394,7 @@ async def test_inspection_rechecks_owning_profile_session_and_policy_after_await
             get_state_event=state, get_joined_members=members,
             get_event=AsyncMock(return_value=awaitable_pin(label)),
         )
-        adapter = SimpleNamespace(
+        adapter = _inspection_adapter(
             _client=client, _event_context_cache=MatrixEventContextCache(), _joined_rooms={room},
             _user_id=client.mxid, _closing=False, _allowed=True, _dm=False,
             _is_allowed_matrix_room_event=AsyncMock(return_value=True),
@@ -488,3 +497,81 @@ async def test_inspection_rechecks_owning_profile_session_and_policy_after_await
         "error": "Matrix room inspection context changed",
     })
     assert (result_a, result_b, again_a) == (expected_a, expected("B"), expected("A"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["members", "missing-state"])
+@pytest.mark.parametrize(("chat_type", "change"), [
+    ("group", "unchanged"), ("group", "joined"), ("group", "allowlist"),
+    ("dm", "allowlist"), ("group", "sender"), ("group", "closing"),
+])
+async def test_final_admission_uses_current_matrix_policy_after_identity_await(
+    kind: str, chat_type: str, change: str,
+):
+    from tests.gateway.test_matrix import _make_adapter
+
+    room, requester = "!room:server", "@alice:server"
+    adapter = _make_adapter()
+    adapter._joined_rooms = {room}
+    adapter._allowed_room_ids = {room}
+    sender_allowed = True
+    network_complete = False
+    paused = False
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def identity(_room):
+        nonlocal paused
+        if network_complete and not paused:
+            paused = True
+            started.set()
+            await release.wait()
+        return chat_type == "dm"
+
+    async def members(_room):
+        nonlocal network_complete
+        network_complete = True
+        return {requester: {"displayname": "Private profile"}}
+
+    async def state(_room, event_type, **_kwargs):
+        nonlocal network_complete
+        if event_type == "m.room.encryption":
+            network_complete = True
+            class MNotFound(Exception):
+                pass
+            raise MNotFound()
+        return {"name": "Private planning"} if event_type == "m.room.name" else {}
+
+    adapter._client = SimpleNamespace(get_joined_members=members, get_state_event=state)
+    adapter._is_dm_room = identity
+    adapter._is_sender_authorized = lambda *_args, **_kwargs: sender_allowed
+    pending = asyncio.create_task(inspect_matrix_room(
+        adapter, "state" if kind == "missing-state" else kind, room, 20, requester=requester,
+    ))
+    try:
+        await asyncio.wait_for(started.wait(), timeout=2)
+        if change == "joined":
+            adapter._joined_rooms.clear()
+        if change == "allowlist":
+            adapter._allowed_room_ids = {"!other:server"}
+        if change == "sender":
+            sender_allowed = False
+        if change == "closing":
+            adapter._closing = True
+    finally:
+        release.set()
+    result = await asyncio.wait_for(pending, timeout=2)
+    accepted = {
+        "members": {"members": [{"user_id": requester, "display_name": "Private profile",
+                                 "avatar_url": None}], "total": 1, "truncated": False},
+        "missing-state": {"room_id": room, "name": "Private planning", "topic": None,
+                          "canonical_alias": None, "join_rule": None,
+                          "history_visibility": None, "encryption": None},
+    }[kind]
+    expected = {
+        "joined": {"error": "Matrix room is not allowed or joined"},
+        "sender": {"error": "Matrix requester is not authorized for this room"},
+        "closing": {"error": "Matrix client is disconnected"},
+    }.get(change, accepted)
+    if change == "allowlist" and chat_type != "dm":
+        expected = {"error": "Matrix room is not allowed or joined"}
+    assert result == expected

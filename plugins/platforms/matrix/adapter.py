@@ -1996,12 +1996,16 @@ class MatrixAdapter(MatrixContextMixin, BasePlatformAdapter):
         localpart = (sender or "").strip().lstrip("@").partition(":")[0]
         return not localpart or localpart.startswith("_")
 
+    def _is_allowed_matrix_room(self, room_id: str, chat_type: str) -> bool:
+        return not self._allowed_room_ids or room_id in self._allowed_room_ids or chat_type == "dm"
+
     async def _is_allowed_matrix_room_event(self, room_id: str) -> bool:
         """MATRIX_ALLOWED_ROOMS gate; DMs are exempt so personal chats survive a project allowlist."""
-        if not self._allowed_room_ids or room_id in self._allowed_room_ids:
+        if self._is_allowed_matrix_room(room_id, "group"):
             return True
         try:
-            return await self._is_dm_room(room_id)
+            chat_type = "dm" if await self._is_dm_room(room_id) else "group"
+            return self._is_allowed_matrix_room(room_id, chat_type)
         except Exception as exc:
             logger.debug("Matrix: could not resolve room identity for allowlist check in %s: %s", room_id, exc)
             return False

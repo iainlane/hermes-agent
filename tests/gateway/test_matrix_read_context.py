@@ -8,6 +8,7 @@ import pytest
 
 from plugins.platforms.matrix.read_context import read_matrix_context
 from plugins.platforms.matrix.reply_context import MatrixEventContextCache
+from tests.gateway.test_matrix import _make_adapter
 
 
 def test_gateway_binds_receiving_adapter_for_matrix_reads():
@@ -49,7 +50,8 @@ async def test_read_thread_filters_unrelated_events_and_reports_missing_keys():
         return root if "/event/" in path else {"chunk": raw}
 
     client = SimpleNamespace(api=SimpleNamespace(request=AsyncMock(side_effect=request)), crypto=None)
-    adapter = SimpleNamespace(
+    adapter = _make_adapter()
+    vars(adapter).update(
         _event_context_cache=MatrixEventContextCache(),
         _client=client, _joined_rooms={"!room:server"}, _user_id="@bot:server",
         _is_allowed_matrix_room_event=AsyncMock(return_value=True),
@@ -74,7 +76,8 @@ async def test_read_thread_filters_unrelated_events_and_reports_missing_keys():
 @pytest.mark.asyncio
 async def test_read_rejects_unauthorized_requester_before_network():
     client = SimpleNamespace(api=SimpleNamespace(request=AsyncMock()))
-    adapter = SimpleNamespace(
+    adapter = _make_adapter()
+    vars(adapter).update(
         _event_context_cache=MatrixEventContextCache(),
         _client=client, _joined_rooms={"!room:server"}, _user_id="@bot:server",
         _is_allowed_matrix_room_event=AsyncMock(return_value=True),
@@ -106,7 +109,8 @@ async def test_read_room_uses_sync_token_and_decrypts_with_owning_client(monkeyp
         sync_store=SimpleNamespace(get_next_batch=AsyncMock(return_value="s42")),
         crypto=crypto,
     )
-    adapter = SimpleNamespace(
+    adapter = _make_adapter()
+    vars(adapter).update(
         _event_context_cache=MatrixEventContextCache(),
         _client=client, _joined_rooms={"!room:server"}, _user_id="@bot:server",
         _is_allowed_matrix_room_event=AsyncMock(return_value=True),
