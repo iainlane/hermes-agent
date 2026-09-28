@@ -13,6 +13,7 @@ _TOOLSET_PLATFORM_RESTRICTIONS = {
     "matrix_admin": {"matrix"},
     "matrix_image_packs": {"matrix"},
     "matrix_unread": {"matrix"},
+    "matrix_threads": {"matrix"},
 }
 
 
