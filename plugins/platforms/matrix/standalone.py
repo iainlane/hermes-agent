@@ -1,106 +1,182 @@
-"""Standalone Matrix delivery through the Client-Server API."""
+"""Plaintext Matrix delivery when a native adapter is unavailable."""
+
+from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
+from dataclasses import dataclass
 import os
+import json
 import re
 import time
+from typing import Any, TYPE_CHECKING
+from urllib.parse import quote
 
 from agent.secret_scope import get_secret
+from gateway.config import PlatformConfig
 from gateway.platforms._shared import send_error
 
-
-async def _resolve_matrix_room_alias(homeserver: str, token: str, alias: str):
-    """Resolve a room alias to a room ID, or return a lookup error."""
-    try:
-        import aiohttp
-    except ImportError:
-        return None, "aiohttp not installed. Run: pip install aiohttp"
-    from urllib.parse import quote
-    encoded_alias = quote(alias, safe="")
-    url = f"{homeserver}/_matrix/client/v3/directory/room/{encoded_alias}"
-    headers = {"Authorization": f"Bearer {token}"}
-    try:
-        async with aiohttp.ClientSession() as session:
-            async def _lookup():
-                async with session.get(url, headers=headers) as resp:
-                    if resp.status != 200:
-                        body = await resp.text()
-                        return None, f"alias resolution failed ({resp.status}): {body}"
-                    return await resp.json(), None
-
-            data, err = await asyncio.wait_for(_lookup(), timeout=15)
-        if err:
-            return None, err
-        room_id = data.get("room_id")
-        if not room_id:
-            return None, f"alias resolution returned no room_id for {alias}"
-        return room_id, None
-    except Exception as e:
-        return None, f"alias resolution failed: {e}"
+_MAX_CONTENT_BYTES = 45000
+_MAX_TEXT_BYTES = _MAX_CONTENT_BYTES // 3
 
 
-
-async def _resolve_matrix_room_alias_target(homeserver: str, token: str, chat_id: str):
-    """Return a concrete room ID for alias targets, or the original target."""
-    if not chat_id.startswith("#"):
-        return chat_id, None
-    resolved, err = await _resolve_matrix_room_alias(homeserver, token, chat_id)
-    if err:
-        return chat_id, f"Matrix alias '{chat_id}': {err}"
-    return resolved, None
+if TYPE_CHECKING:
+    from aiohttp import ClientSession
 
 
+@dataclass
+class _MatrixAPIError(ValueError):
+    status: int
+    response: dict[str, Any]
 
-async def _standalone_send(pconfig, chat_id, message, *, thread_id=None, media_files=None, force_document=False):
-    """standalone_sender_fn: out-of-process delivery via the Client-Server API (cron without gateway)."""
+    def __str__(self) -> str:
+        return f"Matrix API error ({self.status}): {self.response}"
+
+
+@dataclass
+class _HTTPDelivery:
+    session: ClientSession
+    homeserver: str
+
+    async def request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        async with self.session.request(
+            method, f"{self.homeserver}/_matrix/client/v3/{path}", **kwargs
+        ) as response:
+            data = await response.json()
+            if not isinstance(data, dict):
+                raise ValueError("Matrix API returned an invalid JSON object")
+            if response.status not in {200, 201}:
+                raise _MatrixAPIError(response.status, data)
+            return data
+
+    async def resolve(self, target: str) -> str:
+        if target.startswith("@"):
+            raise ValueError(
+                "MXID delivery is unsupported. Use the DM's room ID or a room alias."
+            )
+        if target.startswith("!"):
+            return target
+        if not target.startswith("#"):
+            raise ValueError("Invalid Matrix target: use a room ID or alias")
+        info = await self.request("GET", f"directory/room/{quote(target, safe='')}")
+        room_id = info.get("room_id")
+        if not isinstance(room_id, str) or not room_id.startswith("!"):
+            raise ValueError(
+                "alias did not resolve to a room ID; publish a Local Address on the room"
+            )
+        joined = await self.request(
+            "POST",
+            f"join/{quote(room_id, safe='')}",
+            params=[("server_name", server) for server in info.get("servers", [])],
+            json={},
+        )
+        if joined.get("room_id") != room_id:
+            raise ValueError(
+                f"join returned '{joined.get('room_id')}', expected room ID '{room_id}'"
+            )
+        return room_id
+
+    async def send(
+        self, target: str, message: str, thread_id: str | None
+    ) -> dict[str, Any]:
+        room_id = await self.resolve(target)
+        try:
+            await self.request(
+                "GET", f"rooms/{quote(room_id, safe='')}/state/m.room.encryption"
+            )
+        except _MatrixAPIError as exc:
+            if exc.status != 404 or exc.response.get("errcode") != "M_NOT_FOUND":
+                raise
+        else:
+            raise ValueError(
+                f"Room '{room_id}' is encrypted; use a native Matrix adapter with E2EE"
+            )
+        from gateway.platforms.base import BasePlatformAdapter
+
+        for chunk in BasePlatformAdapter.truncate_message(
+            message, _MAX_TEXT_BYTES, lambda text: len(json.dumps(text)) - 2,
+        ):
+            txn_id = f"hermes_{int(time.time() * 1000)}_{os.urandom(4).hex()}"
+            data = await self.request(
+                "PUT",
+                f"rooms/{quote(room_id, safe='')}/send/m.room.message/{txn_id}",
+                json=_text_payload(chunk, thread_id),
+            )
+        return {
+            "success": True,
+            "platform": "matrix",
+            "chat_id": room_id,
+            "message_id": data.get("event_id"),
+        }
+
+
+def _text_payload(message: str, thread_id: str | None) -> dict[str, Any]:
+    from plugins.platforms.matrix.rendering import _latex_to_tokens, _tokens_to_mx_maths
+
+    payload = {"msgtype": "m.text", "body": message}
+    if thread_id:
+        payload["m.relates_to"] = {
+            "rel_type": "m.thread",
+            "event_id": thread_id,
+            "is_falling_back": True,
+            "m.in_reply_to": {"event_id": thread_id},
+        }
+    if len(json.dumps(payload)) > _MAX_CONTENT_BYTES:
+        raise ValueError("Matrix message metadata exceeds the event size limit")
+    with suppress(ImportError):
+        import markdown
+
+        tokenized, tex_store = _latex_to_tokens(message)
+        html = markdown.markdown(tokenized, extensions=["fenced_code", "tables"])
+        formatted = {"format": "org.matrix.custom.html", "formatted_body": _tokens_to_mx_maths(
+            re.sub(r"<h[1-6]>(.*?)</h[1-6]>", r"<strong>\1</strong>", html), tex_store
+        )}
+        if len(json.dumps({**payload, **formatted})) <= _MAX_CONTENT_BYTES:
+            payload.update(formatted)
+    return payload
+
+
+async def standalone_send(
+    pconfig: PlatformConfig,
+    chat_id: str,
+    message: str,
+    *,
+    thread_id: str | None = None,
+    media_files: list | None = None,
+    force_document: bool = False,
+) -> dict[str, Any]:
+    from plugins.platforms.matrix.adapter import _resolve_e2ee_mode
+
     extra = getattr(pconfig, "extra", {}) or {}
+    if _resolve_e2ee_mode(extra) == "required":
+        return send_error(
+            f"Matrix target '{chat_id}': E2EE is required; use a native Matrix adapter"
+        )
     try:
         import aiohttp
     except ImportError:
-        return send_error("aiohttp not installed. Run: pip install aiohttp")
+        return send_error("aiohttp not installed. Run: hermes pm install")
     try:
-        # In-turn reads inside an installed secret scope: honor get_secret, no env fallback — for the
-        # homeserver too, so the scoped token is never sent to the default profile's server.
-        homeserver = (extra.get("homeserver") or get_secret("MATRIX_HOMESERVER", "") or "").rstrip("/")
-        token = getattr(pconfig, "token", None) or get_secret("MATRIX_ACCESS_TOKEN", "") or ""
+        homeserver = (
+            extra.get("homeserver") or get_secret("MATRIX_HOMESERVER", "") or ""
+        ).rstrip("/")
+        token = (
+            getattr(pconfig, "token", None)
+            or get_secret("MATRIX_ACCESS_TOKEN", "")
+            or ""
+        )
         if not homeserver or not token:
-            return send_error("Matrix not configured (MATRIX_HOMESERVER, MATRIX_ACCESS_TOKEN required)")
-        chat_id, err = await _resolve_matrix_room_alias_target(homeserver, token, chat_id)
-        if err:
-            return send_error(err)
-        txn_id = f"hermes_{int(time.time() * 1000)}_{os.urandom(4).hex()}"
-        from urllib.parse import quote
-        url = f"{homeserver}/_matrix/client/v3/rooms/{quote(chat_id, safe='')}/send/m.room.message/{txn_id}"
-        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-        payload = {"msgtype": "m.text", "body": message}
-        with suppress(ImportError):
-            from plugins.platforms.matrix.rendering import _latex_to_tokens, _tokens_to_mx_maths
-            import markdown as _md
-            tokenized, tex_store = _latex_to_tokens(message)
-            html = _md.markdown(tokenized, extensions=["fenced_code", "tables"])
-            payload["format"] = "org.matrix.custom.html"
-            payload["formatted_body"] = _tokens_to_mx_maths(
-                re.sub(r"<h[1-6]>(.*?)</h[1-6]>", r"<strong>\1</strong>", html), tex_store)
-        if thread_id:
-            payload["m.relates_to"] = {
-                "rel_type": "m.thread",
-                "event_id": thread_id,
-                "is_falling_back": True,
-            }
-        # asyncio.wait_for, not aiohttp.ClientTimeout: cron invokes this via
-        # run_coroutine_threadsafe ("Timeout context manager should be used inside a task").
-        async with aiohttp.ClientSession() as session:
-            async def _do_send():
-                async with session.put(url, headers=headers, json=payload) as resp:
-                    if resp.status not in {200, 201}:
-                        return send_error(f"Matrix API error ({resp.status}): {await resp.text()}")
-                    data = await resp.json()
-                    return {"success": True, "platform": "matrix", "chat_id": chat_id,
-                            "message_id": data.get("event_id")}
-            try:
-                return await asyncio.wait_for(_do_send(), timeout=30)
-            except asyncio.TimeoutError:
-                return send_error("Matrix API timeout (30s)")
-    except Exception as e:
-        return send_error(f"Matrix send failed: {e}")
+            return send_error(
+                "Matrix not configured (MATRIX_HOMESERVER, MATRIX_ACCESS_TOKEN required)"
+            )
+        headers = {"Authorization": f"Bearer {token}"}
+        async with aiohttp.ClientSession(headers=headers) as session:
+            delivery = _HTTPDelivery(session, homeserver)
+            # The scheduler may submit this coroutine across threads. Bound the task itself.
+            return await asyncio.wait_for(
+                delivery.send(chat_id, message, thread_id), timeout=45
+            )
+    except asyncio.TimeoutError:
+        return send_error(f"Matrix target '{chat_id}': API timeout (45s)")
+    except Exception as exc:
+        return send_error(f"Matrix target '{chat_id}': {exc}")

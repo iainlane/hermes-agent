@@ -51,7 +51,6 @@ if TYPE_CHECKING:
     from plugins.platforms.matrix.room_context import MatrixRoomIdentity
 
 from agent.i18n import t
-from agent.secret_scope import get_secret
 from gateway.platforms._shared import (
     apply_yaml_bridge as _apply_yaml_bridge, extra_or_secret as _extra_or_secret,
     get_scoped_secret as _get_scoped_secret
@@ -1278,7 +1277,12 @@ class MatrixAdapter(MatrixDeliveryMixin, MatrixInboundEventMixin, MatrixMediaMix
         metadata: Optional[Dict[str, Any]] = None) -> SendResult:
         if not content:
             return SendResult(success=True)
-        chat_id = await self._resolve_send_target(chat_id)
+        target = chat_id
+        try:
+            chat_id = await self._resolve_send_target(target)
+            await self._check_room_encryption(chat_id)
+        except Exception as exc:
+            return SendResult(success=False, error=f"Matrix target '{target}': {exc}")
         last_event_id = None
         event_ids: list[str] = []
         for chunk in self.truncate_message(self.format_message(content), self.max_message_length):
@@ -1683,10 +1687,15 @@ class MatrixAdapter(MatrixDeliveryMixin, MatrixInboundEventMixin, MatrixMediaMix
         is_voice: bool = False, voice_metadata: Optional[Dict[str, Any]] = None) -> SendResult:
         if len(data) > self._max_media_bytes:
             return self._media_too_large(len(data))
-        room_id = await self._resolve_send_target(room_id)
+        target = room_id
+        try:
+            room_id = await self._resolve_send_target(target)
+            encrypted = await self._check_room_encryption(room_id)
+        except Exception as exc:
+            return SendResult(success=False, error=f"Matrix target '{target}': {exc}")
         upload_data = data
         encrypted_file = None
-        if await self._room_needs_encrypted_upload(room_id):
+        if encrypted:
             try:
                 from mautrix.crypto.attachments import encrypt_attachment
                 upload_data, encrypted_file = encrypt_attachment(data)
@@ -1716,17 +1725,6 @@ class MatrixAdapter(MatrixDeliveryMixin, MatrixInboundEventMixin, MatrixMediaMix
         self._apply_relation_metadata(room_id, msg_content, reply_to=reply_to, metadata=metadata)
         return await self._send_content_event(room_id, msg_content)
 
-    async def _room_needs_encrypted_upload(self, room_id: str) -> bool:
-        """E2EE on, Olm machine loaded, and the state store says the room is encrypted."""
-        if not (self._encryption and getattr(self._client, "crypto", None)):
-            return False
-        state_store = getattr(self._client, "state_store", None)
-        if not state_store:
-            return False
-        try:
-            return bool(await state_store.is_encrypted(RoomID(room_id)))
-        except Exception:
-            return False
 
     def _media_too_large(self, size: int) -> SendResult:
         return SendResult(
@@ -1737,6 +1735,7 @@ class MatrixAdapter(MatrixDeliveryMixin, MatrixInboundEventMixin, MatrixMediaMix
     ) -> SendResult:
         """Send a prebuilt m.room.message payload, mapping exceptions to SendResult."""
         try:
+            await self._check_room_encryption(room_id)
             event_id = await self._client.send_message_event(RoomID(room_id), EventType.ROOM_MESSAGE, msg_content)
             self._thread_fallbacks.remember_sent(room_id, msg_content, str(event_id))
             self._remember_followup_delivery(room_id, str(event_id), msg_content, finalize=finalize)
@@ -2951,7 +2950,7 @@ def _is_connected(config) -> bool:
 
 
 def register(ctx) -> None:
-    from plugins.platforms.matrix.standalone import _standalone_send
+    from plugins.platforms.matrix.standalone import standalone_send
 
     ctx.register_platform(
         name="matrix", label="Matrix", adapter_factory=MatrixAdapter, check_fn=matrix_deps_present,
@@ -2959,5 +2958,5 @@ def register(ctx) -> None:
         required_env=["MATRIX_HOMESERVER", "MATRIX_ACCESS_TOKEN"], install_hint="pip install 'mautrix[encryption]'",
         setup_fn=interactive_setup, apply_yaml_config_fn=_apply_yaml_config, allowed_users_env="MATRIX_ALLOWED_USERS",
         allow_all_env="MATRIX_ALLOW_ALL_USERS", cron_deliver_env_var="MATRIX_HOME_ROOM",
-        standalone_sender_fn=_standalone_send, max_message_length=DEFAULT_MAX_MESSAGE_LENGTH, emoji="🔐",
+        standalone_sender_fn=standalone_send, max_message_length=DEFAULT_MAX_MESSAGE_LENGTH, emoji="🔐",
         allow_update_command=True, reads_non_conversational_mark=True)
