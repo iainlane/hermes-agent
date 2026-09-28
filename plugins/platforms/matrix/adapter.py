@@ -77,6 +77,7 @@ from gateway.platforms.base import (
 from gateway.platforms.base import transcode_to_ogg_opus
 from gateway.platforms.event import MessageEvent, MessageType, ProcessingOutcome
 from gateway.platforms.helpers import ThreadParticipationTracker
+from plugins.platforms.matrix.adapter_feedback import MatrixFeedbackPolicy, ReadReceiptMode
 from plugins.platforms.matrix.voice_mention import ParkedVoices, VoiceGate, has_voice_marker, is_voice_event
 
 logger = logging.getLogger(__name__)
@@ -893,28 +894,9 @@ class MatrixAdapter(BasePlatformAdapter):
         self._matrix_session_scope = raw_session_scope if raw_session_scope in {"auto", "room", "thread"} else "auto"
         self._process_notices: bool = self._extra_truthy(config, "process_notices", "MATRIX_PROCESS_NOTICES", "false")
 
-        # Lifecycle reactions: configurable via config.yaml ``matrix.reactions``
-        # (env ``MATRIX_REACTIONS`` as legacy fallback; YAML wins when set).
-        # When enabled (default), the adapter annotates every processed message
-        # with an eyes reaction on start and a checkmark/cross on completion. On
-        # Beeper those reactions propagate to each bridged network, so every
-        # incoming message visibly gets a checkmark — set ``reactions: false``
-        # to stop that.
-        self._reactions_enabled: bool = self._parse_reactions_enabled(config)
-
-        # Read receipts: configurable via config.yaml ``matrix.read_receipts``
-        # (env ``MATRIX_READ_RECEIPTS`` as legacy fallback; YAML wins when set).
-        # Three modes control when an ``m.read`` receipt / fully-read marker is
-        # sent for an incoming message:
-        #   - "immediate" (default): mark read the instant the event arrives
-        #     (historical behavior).
-        #   - "after_processing": mark read only once the agent finishes the
-        #     turn, so the receipt reflects an actual reply rather than mere
-        #     ingestion.
-        #   - "disabled": never send read receipts. On Beeper this stops every
-        #     bridged network (Messenger/Instagram/WhatsApp/...) from showing
-        #     messages as read the instant the gateway processes them.
-        self._read_receipts_mode: str = self._parse_read_receipts_mode(config)
+        feedback = MatrixFeedbackPolicy.from_config(config)
+        self._reactions_enabled: bool = feedback.reactions
+        self._read_receipts_mode: ReadReceiptMode = feedback.read_receipts
         self._pending_reactions: dict[tuple[str, str], str] = {}
         # Let the final message land before redacting reactions ("missing event" in some
         # clients). 5s is empirically safe; if it must be tunable, use config.yaml not env.
@@ -989,79 +971,6 @@ class MatrixAdapter(BasePlatformAdapter):
         """MATRIX_THREAD_REQUIRE_MENTION (scoped) → ``thread_require_mention`` in config.extra → false."""
         configured = _extra_or_secret(config.extra, "thread_require_mention", "MATRIX_THREAD_REQUIRE_MENTION", False)
         return configured if isinstance(configured, bool) else str(configured).lower() not in {"false", "0", "no", "off"}
-
-    @staticmethod
-    def _parse_read_receipts_mode(config) -> str:
-        """Resolve read-receipt mode from config.yaml ``matrix.read_receipts``.
-
-        Falls back to the legacy ``MATRIX_READ_RECEIPTS`` env var; the YAML
-        value always wins when set. Returns one of ``"immediate"``,
-        ``"after_processing"``, or ``"disabled"``.
-
-        Back-compat: earlier releases exposed only a boolean env var, so
-        boolean / ``"true"`` / ``"false"`` / ``"on"`` / ``"off"`` / ``"1"`` /
-        ``"0"`` values are still accepted — truthy maps to ``"immediate"`` and
-        falsy to ``"disabled"``. Unrecognized values fall back to the default.
-        """
-        default = "immediate"
-        valid = {"immediate", "after_processing", "disabled"}
-
-        def _coerce(raw) -> Optional[str]:
-            if raw is None:
-                return None
-            if isinstance(raw, bool):
-                return "immediate" if raw else "disabled"
-            token = str(raw).strip().lower()
-            if not token:
-                return None
-            if token in valid:
-                return token
-            # Legacy boolean spellings (the pre-mode env flag).
-            if token in {"true", "1", "yes", "on", "enabled"}:
-                return "immediate"
-            if token in {"false", "0", "no", "off"}:
-                return "disabled"
-            return default
-
-        configured = _coerce(config.extra.get("read_receipts"))
-        if configured is not None:
-            return configured
-        env_mode = _coerce(os.getenv("MATRIX_READ_RECEIPTS"))
-        if env_mode is not None:
-            return env_mode
-        return default
-
-    @staticmethod
-    def _parse_reactions_enabled(config) -> bool:
-        """Resolve lifecycle-reaction toggle from ``matrix.reactions``.
-
-        Falls back to the legacy ``MATRIX_REACTIONS`` env var; the YAML value
-        always wins when set. Defaults to enabled. A value is falsy when it is
-        the boolean ``False`` or one of ``"false"`` / ``"0"`` / ``"no"`` /
-        ``"off"`` (case-insensitive); everything else is truthy.
-        """
-
-        def _coerce(raw) -> Optional[bool]:
-            if raw is None:
-                return None
-            if isinstance(raw, bool):
-                return raw
-            token = str(raw).strip().lower()
-            if not token:
-                return None
-            return token not in {"false", "0", "no", "off"}
-
-        configured = _coerce(config.extra.get("reactions"))
-        if configured is not None:
-            return configured
-        env_val = _coerce(os.getenv("MATRIX_REACTIONS"))
-        if env_val is not None:
-            return env_val
-        return True
-
-    # ------------------------------------------------------------------
-    # E2EE helpers
-    # ------------------------------------------------------------------
 
     @staticmethod
     def _extract_server_ed25519(device_keys_obj: Any) -> Optional[str]:
@@ -2193,9 +2102,7 @@ class MatrixAdapter(BasePlatformAdapter):
         if thread_id:
             await self._threads.mark_async(thread_id)  # covers real roots and synthetic ones alike
 
-        # "immediate" marks read on arrival; "after_processing" defers the
-        # receipt to on_processing_complete; "disabled" never sends one.
-        if self._read_receipts_mode == "immediate":
+        if self._read_receipts_mode == ReadReceiptMode.IMMEDIATE:
             self._background_read_receipt(room_id, event_id)
 
         return body, is_dm, chat_type, thread_id, display_name, source
@@ -2261,8 +2168,9 @@ class MatrixAdapter(BasePlatformAdapter):
                 voice_id, voice_content, voice_relates = parked
                 await self._handle_media_message(
                     room_id, sender, voice_id, event_ts, voice_content, voice_relates, "m.audio",
-                    mention_claimed=True)
-                self._background_read_receipt(room_id, event_id)  # the claim receipted the voice
+                    mention_claimed=True, receipt_event_id=event_id)
+                if self._read_receipts_mode == ReadReceiptMode.IMMEDIATE:
+                    self._background_read_receipt(room_id, event_id)
                 return
         msg_event = await self._build_inbound_event(
             room_id, sender, event_id, _normalize_matrix_bang_command(body), source_content, relates_to)
@@ -2275,7 +2183,8 @@ class MatrixAdapter(BasePlatformAdapter):
 
     async def _handle_media_message(
         self, room_id: str, sender: str, event_id: str, event_ts: float, source_content: dict,
-        relates_to: dict, msgtype: str, mention_claimed: bool = False) -> None:
+        relates_to: dict, msgtype: str, mention_claimed: bool = False,
+        receipt_event_id: Optional[str] = None) -> None:
         body = source_content.get("body", "") or ""
         url = source_content.get("url", "")
         if url and not str(url).startswith("mxc://"):
@@ -2332,6 +2241,8 @@ class MatrixAdapter(BasePlatformAdapter):
             room_id, sender, event_id, body, source_content, relates_to, ctx=ctx, message_type=msg_type,
             media_urls=media_urls, media_types=[media_type] if media_urls else None, media_msgtype=msgtype)
         if msg_event is not None:
+            if receipt_event_id:
+                msg_event.metadata["matrix_read_receipt_event_id"] = receipt_event_id
             await self.handle_message(msg_event)
 
     @staticmethod
@@ -2547,23 +2458,10 @@ class MatrixAdapter(BasePlatformAdapter):
                 self._pending_reactions[(room_id, msg_id)] = reaction_event_id
 
     async def on_processing_complete(self, event: MessageEvent, outcome: ProcessingOutcome) -> None:
-        """Replace eyes with checkmark (success) or cross (failure).
-
-        Also emits a deferred read receipt when ``read_receipts`` is set to
-        ``after_processing`` — the message is marked read once the turn is
-        done rather than the instant it arrived.
-        """
         msg_id, room_id = event.message_id, event.source.chat_id
-        # Deferred read receipt ("after_processing" mode). Independent of the
-        # reaction lifecycle below, and skipped on cancellation so a cancelled
-        # turn doesn't mark the triggering message read.
-        if (
-            self._read_receipts_mode == "after_processing"
-            and msg_id
-            and room_id
-            and outcome != ProcessingOutcome.CANCELLED
-        ):
-            self._background_read_receipt(room_id, msg_id)
+        if self._read_receipts_mode.should_send_on_completion(outcome) and msg_id and room_id:
+            receipt_id = event.metadata.get("matrix_read_receipt_event_id") or msg_id
+            self._background_read_receipt(room_id, receipt_id)
         if not self._reactions_enabled or not msg_id or not room_id or outcome == ProcessingOutcome.CANCELLED:
             return
         eyes_event_id = self._pending_reactions.pop((room_id, msg_id), None)
@@ -3295,7 +3193,6 @@ _YAML_BRIDGE = (  # (yaml key, env var, kind) for apply_yaml_bridge
     ("require_mention", "MATRIX_REQUIRE_MENTION", "lower"), ("process_notices", "MATRIX_PROCESS_NOTICES", "lower"),
     ("session_scope", "MATRIX_SESSION_SCOPE", "lower"), ("auto_thread", "MATRIX_AUTO_THREAD", "lower"),
     ("dm_mention_threads", "MATRIX_DM_MENTION_THREADS", "lower"),
-    ("read_receipts", "MATRIX_READ_RECEIPTS", "lower"), ("reactions", "MATRIX_REACTIONS", "lower"),
     ("allowed_users", "MATRIX_ALLOWED_USERS", "csv"), ("free_response_rooms", "MATRIX_FREE_RESPONSE_ROOMS", "csv"),
     ("allowed_rooms", "MATRIX_ALLOWED_ROOMS", "csv"), ("ignore_user_patterns", "MATRIX_IGNORE_USER_PATTERNS", "csv"),
     ("max_message_length", "MATRIX_MAX_MESSAGE_LENGTH", "str"),

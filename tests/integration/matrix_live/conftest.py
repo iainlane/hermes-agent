@@ -56,6 +56,12 @@ class LiveGateway:
 
 
 @dataclass(frozen=True)
+class MatrixFeedbackSettings:
+    read_receipts: str = "immediate"
+    reactions: bool = False
+
+
+@dataclass(frozen=True)
 class LinuxNioObserver:
     container: DockerContainer
     account: MatrixAccount
@@ -254,21 +260,38 @@ def linux_nio_observer(
 
 
 @pytest.fixture
+def model_responder() -> Callable[[dict], Text]:
+    return lambda _request: Text("Matrix live reply")
+
+
+@pytest.fixture
+def matrix_feedback() -> MatrixFeedbackSettings:
+    return MatrixFeedbackSettings()
+
+
+@pytest.fixture
 def gateway(
     tmp_path: Path,
     gateway_image: str,
     synapse: tuple[DockerContainer, str, Network],
     live_room: LiveRoom,
+    model_responder: Callable[[dict], Text],
+    matrix_feedback: MatrixFeedbackSettings,
 ) -> Iterator[LiveGateway]:
     _, _, network = synapse
     room_id = live_room.room_id
     home = tmp_path / "hermes"
     home.mkdir(mode=0o777)
-    with FakeLLMServer([Text("Matrix live reply")], bind_host="0.0.0.0") as model:
+    with FakeLLMServer(model_responder, bind_host="0.0.0.0") as model:
         write_hermes_home(
             home,
             f"http://host.docker.internal:{model.port}/v1",
-            extra_config="platforms:\n  matrix:\n    enabled: true\nupdates:\n  check: false\n",
+            extra_config=(
+                "platforms:\n  matrix:\n    enabled: true\n"
+                f"    read_receipts: {matrix_feedback.read_receipts}\n"
+                f"    reactions: {str(matrix_feedback.reactions).lower()}\n"
+                "updates:\n  check: false\n"
+            ),
         )
         with (home / ".env").open("a", encoding="utf-8") as stream:
             stream.write(
@@ -276,7 +299,7 @@ def gateway(
                 f"MATRIX_ACCESS_TOKEN={live_room.bot.access_token}\n"
                 f"MATRIX_ALLOWED_USERS={live_room.observer.user_id}\n"
                 f"MATRIX_HOME_ROOM={room_id}\n"
-                "MATRIX_E2EE_MODE=optional\nMATRIX_REACTIONS=false\nMATRIX_AUTO_THREAD=false\n"
+                "MATRIX_E2EE_MODE=optional\nMATRIX_AUTO_THREAD=false\n"
             )
         home.chmod(0o777)
 
