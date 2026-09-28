@@ -2,6 +2,7 @@
 
 import pytest
 
+from gateway.platforms.event import MessageEvent
 from gateway.turn_context import TurnContext
 from plugins.platforms.matrix.reaction_followups import ReactionWatchStore
 from plugins.platforms.matrix.reply_context import MatrixEventContextCache
@@ -12,13 +13,13 @@ def test_queued_nonstreamed_final_arms_after_processing_hook(tmp_path, monkeypat
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
-    from gateway.config import Platform
+    from gateway.config import Platform, PlatformConfig
     from gateway.platforms.base import BasePlatformAdapter, ProcessingOutcome, SendResult
     from gateway.session import SessionSource
     from plugins.platforms.matrix.adapter import MatrixAdapter
 
     async def exercise():
-        adapter = object.__new__(MatrixAdapter)
+        adapter = MatrixAdapter(PlatformConfig(enabled=True))
         adapter._store_dir = tmp_path / "store"
         adapter._reaction_followup_actions = {}
         adapter._active_sessions = {"session": asyncio.Event()}
@@ -30,7 +31,7 @@ def test_queued_nonstreamed_final_arms_after_processing_hook(tmp_path, monkeypat
             user_id="@alice:test",
             profile="work",
         )
-        event = SimpleNamespace(source=source, message_id=None)
+        event = MessageEvent(text="", source=source, message_id=None)
         assert await adapter.configure_reaction_followups(
             "session", True, ("👍",), room_id="!room:test",
             requester="@alice:test", thread_id="", profile="work", session_id="sid",
@@ -41,6 +42,10 @@ def test_queued_nonstreamed_final_arms_after_processing_hook(tmp_path, monkeypat
             BasePlatformAdapter,
             "send_final_ledgered",
             AsyncMock(return_value=(SendResult(success=True, message_id="$queued"), adapter)),
+        )
+        adapter._remember_followup_delivery(
+            source.chat_id, "$queued", {"msgtype": "m.text", "body": "Queued answer"},
+            finalize=True,
         )
         await adapter.send_final_ledgered(event, "session", "Queued answer", {}, reply_to=None)
 
@@ -109,6 +114,7 @@ def test_queued_final_watches_terminal_turn_requester_and_thread(tmp_path, monke
             "session_key": "session",
             "session_id": "sid",
             "requester": "@bob:test",
+            "delivery_event_id": "$answer",
             "source": {
                 **outer_source.to_dict(),
                 "user_id": "@bob:test",
@@ -180,9 +186,11 @@ def test_split_final_delivery_arms_only_successful_replies(tmp_path, monkeypatch
             event, "session", "A reply", {}, reply_to=None
         )
         assert (
-            store.claim("work", "!room:test", "$first", "@alice:test", "👍") is not None
+            store.claim("work", "!room:test", "$first", "@alice:test", "👍",
+                        verified_delivery_event_id="$second") is not None
         )
-        assert store.claim("work", "!room:test", "$second", "@alice:test", "👍") is None
+        assert store.claim("work", "!room:test", "$second", "@alice:test", "👍",
+                           verified_delivery_event_id="$second") is None
 
         await adapter.configure_reaction_followups("session", True, (), **choice_context)
         monkeypatch.setattr(
@@ -232,20 +240,27 @@ def test_watch_claim_is_scoped_atomic_and_expires_without_sleep(tmp_path):
         requester="@alice:test",
         source=source,
         emoji_filter=("👍",),
+        delivery_event_id="$second",
     )
-    assert store.claim("work", "!room:test", "$first", "@bob:test", "👍") is None
-    assert store.claim("other", "!room:test", "$first", "@alice:test", "👍") is None
-    assert store.claim("work", "!other:test", "$first", "@alice:test", "👍") is None
-    assert store.claim("work", "!room:test", "$first", "@alice:test", "👎") is None
+    assert store.claim("work", "!room:test", "$first", "@bob:test", "👍",
+                       verified_delivery_event_id="$second") is None
+    assert store.claim("other", "!room:test", "$first", "@alice:test", "👍",
+                       verified_delivery_event_id="$second") is None
+    assert store.claim("work", "!other:test", "$first", "@alice:test", "👍",
+                       verified_delivery_event_id="$second") is None
+    assert store.claim("work", "!room:test", "$first", "@alice:test", "👎",
+                       verified_delivery_event_id="$second") is None
     assert (
         store.claim(
-            "work", "!room:test", "$first", "@alice:test", "👍", reaction_time=999.0
+            "work", "!room:test", "$first", "@alice:test", "👍",
+            verified_delivery_event_id="$preview",
         )
         is None
     )
 
     restarted = ReactionWatchStore(path, clock=lambda: now[0])
-    claimed = restarted.claim("work", "!room:test", "$second", "@alice:test", "👍")
+    claimed = restarted.claim("work", "!room:test", "$second", "@alice:test", "👍",
+                              verified_delivery_event_id="$second")
     assert claimed == {
         "profile": "work",
         "room_id": "!room:test",
@@ -258,7 +273,8 @@ def test_watch_claim_is_scoped_atomic_and_expires_without_sleep(tmp_path):
         "target_event_id": "$second",
         "text_content": "",
     }
-    assert restarted.claim("work", "!room:test", "$first", "@alice:test", "👍") is None
+    assert restarted.claim("work", "!room:test", "$first", "@alice:test", "👍",
+                           verified_delivery_event_id="$second") is None
 
     store.arm(
         "turn-2",
@@ -271,17 +287,21 @@ def test_watch_claim_is_scoped_atomic_and_expires_without_sleep(tmp_path):
         requester="@alice:test",
         source=source,
         emoji_filter=(),
+        delivery_event_id="$later",
     )
     now[0] += 601
-    assert restarted.claim("work", "!room:test", "$later", "@alice:test", "✅") is None
+    assert restarted.claim("work", "!room:test", "$later", "@alice:test", "✅",
+                           verified_delivery_event_id="$later") is None
 
 
-def test_existing_watch_database_discards_unbound_rows(tmp_path):
+@pytest.mark.parametrize("bound_session", [False, True])
+def test_existing_watch_database_discards_rows_without_delivery_event(tmp_path, bound_session):
+    from contextlib import closing
     import json
     import sqlite3
 
     path = tmp_path / "watches.sqlite"
-    with sqlite3.connect(path) as db:
+    with closing(sqlite3.connect(path)) as db, db:
         db.execute("""
             CREATE TABLE watches (
                 event_id TEXT PRIMARY KEY, turn_id TEXT NOT NULL,
@@ -296,16 +316,22 @@ def test_existing_watch_database_discards_unbound_rows(tmp_path):
             ("$old", "turn-old", "work", "!room:test", "", "session",
              "@alice:test", json.dumps({"chat_id": "!room:test"}), "[]", 1600.0),
         )
+        if bound_session:
+            db.execute("ALTER TABLE watches ADD COLUMN session_id TEXT NOT NULL DEFAULT 'sid'")
 
     store = ReactionWatchStore(path, clock=lambda: 1000.0)
-    assert store.claim("work", "!room:test", "$old", "@alice:test", "👍") is None
+    assert store.claim("work", "!room:test", "$old", "@alice:test", "👍",
+                       verified_delivery_event_id="$old") is None
+    assert store.candidate("!room:test", "$old") is None
 
     store.arm(
         "turn-new", ("$new",), profile="work", room_id="!room:test",
         thread_id="", session_key="session", session_id="sid",
         requester="@alice:test", source={"chat_id": "!room:test"}, emoji_filter=(),
+        delivery_event_id="$new",
     )
-    claimed = store.claim("work", "!room:test", "$new", "@alice:test", "👍")
+    claimed = store.claim("work", "!room:test", "$new", "@alice:test", "👍",
+                          verified_delivery_event_id="$new")
     assert claimed == {
         "profile": "work",
         "room_id": "!room:test",
@@ -354,7 +380,9 @@ def test_reaction_intake_starts_one_turn_with_actor_target_and_emoji(tmp_path):
             "$second",
             MatrixEventContext("@hermes:test", "The second chunk explains the answer."),
         )
-        adapter._client = None
+        adapter._client = SimpleNamespace(api=SimpleNamespace(request=AsyncMock(return_value={
+            "end": "after-final", "chunk": [{"event_id": "$wrong"}, {"event_id": "$react"}],
+        })))
         source = SessionSource(
             platform=Platform.MATRIX,
             chat_id="!room:test",
@@ -373,6 +401,7 @@ def test_reaction_intake_starts_one_turn_with_actor_target_and_emoji(tmp_path):
             requester="@alice:test",
             source=source.to_dict(),
             emoji_filter=("👍",),
+            delivery_event_id="$second",
         )
         await adapter._handle_followup_reaction(
             "!room:test", "$first", "👍", "@bob:test", "$bad"
@@ -417,6 +446,7 @@ def test_reaction_intake_starts_one_turn_with_actor_target_and_emoji(tmp_path):
 @pytest.mark.parametrize("grant", ("global", "platform", "pairing", "denied"))
 def test_followup_reaction_uses_gateway_source_authorization(tmp_path, monkeypatch, grant):
     import asyncio
+    from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
     from gateway.config import GatewayConfig, Platform, PlatformConfig
@@ -448,6 +478,9 @@ def test_followup_reaction_uses_gateway_source_authorization(tmp_path, monkeypat
             adapter._store_dir = tmp_path / "store"
             adapter._is_allowed_matrix_room_event = AsyncMock(return_value=True)
             adapter.handle_message = AsyncMock()
+            adapter._client = SimpleNamespace(api=SimpleNamespace(request=AsyncMock(return_value={
+                "end": "after-final", "chunk": [{"event_id": "$reaction"}],
+            })))
             adapter.set_authorization_check(runner._make_adapter_auth_check(Platform.MATRIX))
             source = adapter.build_source(
                 chat_id="!room:test", chat_type="group", user_id="@alice:test",
@@ -460,6 +493,7 @@ def test_followup_reaction_uses_gateway_source_authorization(tmp_path, monkeypat
                 "turn", ("$reply",), profile=source.profile or "", room_id="!room:test",
                 thread_id="$thread", session_key=entry.session_key, session_id=entry.session_id,
                 requester="@alice:test", source=source.to_dict(), emoji_filter=(),
+                delivery_event_id="$reply",
             )
 
             await adapter._handle_followup_reaction(
@@ -511,7 +545,9 @@ def test_reaction_watch_requires_its_original_conversation_at_claim_and_admissio
         adapter.handle_message = AsyncMock()
         adapter._event_context_cache = MatrixEventContextCache()
         adapter._event_context_cache.resolve = AsyncMock(return_value=None)
-        adapter._client = None
+        adapter._client = SimpleNamespace(api=SimpleNamespace(request=AsyncMock(side_effect=[
+            {"end": "after-final"}, {"chunk": [{"event_id": "$queued"}]},
+        ])))
         source = SessionSource(
             platform=Platform.MATRIX, chat_id="!room:test",
             user_id="@alice:test", profile="work",
@@ -560,6 +596,7 @@ def test_reaction_watch_requires_its_original_conversation_at_claim_and_admissio
 
 def test_strict_reaction_followup_cannot_queue_into_replacement_turn(tmp_path, monkeypatch):
     import asyncio
+    from types import SimpleNamespace
     from unittest.mock import AsyncMock, Mock
 
     from gateway.config import GatewayConfig, Platform, PlatformConfig
@@ -586,6 +623,9 @@ def test_strict_reaction_followup_cannot_queue_into_replacement_turn(tmp_path, m
             adapter.set_busy_session_handler(runner._handle_active_session_busy_message)
             adapter._store_dir = tmp_path / "store"
             adapter._is_allowed_matrix_room_event = AsyncMock(return_value=True)
+            adapter._client = SimpleNamespace(api=SimpleNamespace(request=AsyncMock(return_value={
+                "end": "after-final", "chunk": [{"event_id": "$reaction"}],
+            })))
             source = adapter.build_source(
                 chat_id="!room:test", chat_type="group", user_id="@alice:test",
             )
@@ -594,6 +634,7 @@ def test_strict_reaction_followup_cannot_queue_into_replacement_turn(tmp_path, m
                 "turn", ("$reply",), profile=source.profile or "", room_id=source.chat_id,
                 thread_id="", session_key=entry.session_key, session_id=entry.session_id,
                 requester=source.user_id, source=source.to_dict(), emoji_filter=(),
+                delivery_event_id="$reply",
             )
             resolving = asyncio.Event()
             resume = asyncio.Event()
@@ -683,6 +724,9 @@ def test_encrypted_streamed_reply_keeps_final_text_after_restart(tmp_path):
             content={"ciphertext": "encrypted preview"},
         )
         client = SimpleNamespace(
+            api=SimpleNamespace(request=AsyncMock(side_effect=[
+                {"end": "after-final"}, {"chunk": [{"event_id": "$reaction"}]},
+            ])),
             get_event=AsyncMock(return_value=encrypted_preview),
             crypto=SimpleNamespace(decrypt_megolm_event=AsyncMock(
                 return_value=SimpleNamespace(
