@@ -215,7 +215,7 @@ class GatewayInboundMixin:
             and not getattr(event, "_hermes_startup_restore_replay", False)
         ):
             self._queue_startup_restore_event(event)
-            event._processing_state.deferred = True
+            event._processing_state.defer()
             return None
 
         if is_internal:
@@ -572,7 +572,7 @@ class GatewayInboundMixin:
         adapter = self._delivery_adapter_for(source)
         if adapter:
             merge_pending_message_event(adapter._pending_messages, _quick_key, event, merge_text=merge_text)
-            event._processing_state.deferred = True
+            event._processing_state.defer()
 
     async def _hm_busy_slash_or_photo(
         self, event: "MessageEvent", source: SessionSource, _quick_key: str
@@ -685,7 +685,6 @@ class GatewayInboundMixin:
         if _handled:
             return _result
 
-        event._processing_state.deferred = True
         effective_busy_input_mode = self._effective_busy_input_mode(source)
         if self._hm_busy_telegram_grace_queue(event, source, _quick_key, effective_busy_input_mode):
             return None
@@ -701,7 +700,6 @@ class GatewayInboundMixin:
             return None
         if self._draining:
             queue_during_drain = self._queue_during_drain_enabled(effective_busy_input_mode)
-            event._processing_state.deferred = queue_during_drain
             if queue_during_drain:
                 self._queue_or_replace_pending_event(_quick_key, event)
             return (
@@ -709,6 +707,7 @@ class GatewayInboundMixin:
                 if queue_during_drain
                 else f"⏳ Gateway is {self._status_action_gerund()} and is not accepting another turn right now."
             )
+        event._processing_state.defer()
         if effective_busy_input_mode == "queue":
             logger.debug("PRIORITY queue follow-up for session %s", _quick_key)
             self._queue_or_replace_pending_event(_quick_key, event)
@@ -1346,7 +1345,7 @@ class GatewayInboundMixin:
         if _active_session_lease is not None:
             _claim_state.turn.lease = _active_session_lease
         _claim_state.turn.agent = _AGENT_PENDING_SENTINEL
-        _claim_state.turn.event = event
+        _claim_state.turn.event = _claim_state.turn.processing_event = event
         _claim_state.turn.started_ts = time.time()
         self._persist_active_agents()
         _run_generation = self._begin_session_run_generation(_quick_key)

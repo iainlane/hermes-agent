@@ -2242,7 +2242,7 @@ class MatrixAdapter(BasePlatformAdapter):
             media_urls=media_urls, media_types=[media_type] if media_urls else None, media_msgtype=msgtype)
         if msg_event is not None:
             if receipt_event_id:
-                msg_event.read_receipt_message_id = receipt_event_id
+                msg_event._processing_state.receipt_message_id = receipt_event_id
             await self.handle_message(msg_event)
 
     @staticmethod
@@ -2458,8 +2458,8 @@ class MatrixAdapter(BasePlatformAdapter):
                 self._pending_reactions[(room_id, msg_id)] = reaction_event_id
 
     def _send_processing_read_receipt(self, event: MessageEvent, outcome: ProcessingOutcome) -> None:
-        msg_id, room_id = event.message_id, event.source.chat_id
-        receipt_id = event.read_receipt_message_id or msg_id
+        room_id = event.source.chat_id
+        receipt_id = event.receipt_message_id
         if self._read_receipts_mode.should_send_on_completion(outcome) and receipt_id and room_id:
             self._background_read_receipt(room_id, receipt_id)
 

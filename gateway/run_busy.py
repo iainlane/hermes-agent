@@ -11,6 +11,7 @@ import logging
 from typing import TYPE_CHECKING
 import asyncio
 import contextlib
+from dataclasses import replace
 import json
 import os
 import time
@@ -94,6 +95,7 @@ class GatewayBusySessionMixin:
             self._session_state(session_key).conversation.queued_events.append(queued_event)
         else:
             pending_slot[session_key] = queued_event
+        queued_event._processing_state.defer()
         queued_event._gateway_accepted = True
 
     def _promote_queued_event(
@@ -658,10 +660,12 @@ class GatewayBusySessionMixin:
         turn = self._session_state(session_key).turn
         if turn.agent is not running_agent:
             return None
-        if turn.event is not None and turn.event is not event:
-            turn.event.absorb_turn_input(event)
+        event._processing_state.defer()
+        processing_event = turn.processing_event
+        if processing_event is not None and processing_event is not event:
+            processing_event.absorb_turn_input(event)
             if turn.ctx is not None:
-                turn.ctx.reply_expected = turn.event.reply_expected
+                turn.ctx.reply_expected = processing_event.reply_expected
         return turn
 
     async def _interrupt_running_agent_for_busy_event(self, event: MessageEvent, adapter, running_agent) -> None:
@@ -1025,18 +1029,10 @@ class GatewayBusySessionMixin:
             return "Usage: /queue <prompt>"
         adapter = self._delivery_adapter_for(source)
         if adapter:
-            self._enqueue_fifo(quick_key, MessageEvent(
-                text=queued_text, message_type=event.message_type if has_media else MessageType.TEXT,
-                source=event.source, raw_message=event.raw_message, message_id=event.message_id,
-                media_urls=list(getattr(event, "media_urls", []) or []),
-                media_types=list(getattr(event, "media_types", []) or []),
-                media_text_inlined=list(getattr(event, "media_text_inlined", []) or []),
-                reply_to_message_id=event.reply_to_message_id, reply_to_text=event.reply_to_text,
-                reply_to_author_id=event.reply_to_author_id,
-                reply_to_author_name=event.reply_to_author_name,
-                reply_to_is_own_message=event.reply_to_is_own_message, auto_skill=event.auto_skill,
-                channel_prompt=event.channel_prompt, channel_context=event.channel_context,
-                internal=event.internal, timestamp=event.timestamp,
+            self._enqueue_fifo(quick_key, replace(
+                event, text=queued_text, message_type=event.message_type if has_media else MessageType.TEXT,
+                media_urls=list(event.media_urls), media_types=list(event.media_types),
+                media_text_inlined=list(event.media_text_inlined),
             ), adapter)
         depth = self._queue_depth(quick_key, adapter=adapter)
         return "Queued for the next turn." + (f" ({depth} queued)" if depth > 1 else "")
@@ -1055,10 +1051,8 @@ class GatewayBusySessionMixin:
             # Turn-boundary fallback: queue the steer text as its own follow-up turn.
             adapter = self._delivery_adapter_for(source)
             if adapter:
-                self._enqueue_fifo(quick_key, MessageEvent(
-                    text=steer_text, message_type=MessageType.TEXT, source=event.source,
-                    message_id=event.message_id, channel_prompt=event.channel_prompt,
-                    channel_context=event.channel_context,
+                self._enqueue_fifo(quick_key, replace(
+                    event, text=steer_text, message_type=MessageType.TEXT,
                 ), adapter)
             return reply
 

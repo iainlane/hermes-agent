@@ -24,7 +24,7 @@ from contextvars import copy_context
 from gateway.config import Platform
 from gateway.media_repair import repair_explicit_computer_use_media_paths
 from gateway.platforms.base import BasePlatformAdapter, ProcessingOutcome
-from gateway.platforms.event import MessageEvent
+from gateway.platforms.event import MessageEvent, MessageType
 from gateway.response_filters import (
     display_kind_for_event, is_machinery_display_kind, reply_expected_metadata, silence_allowed,
 )
@@ -3292,18 +3292,22 @@ class GatewayTurnMixin:
         """Track this agent as running for the session (interrupt support) once it is created — only
         if this run is still current, else leave the newer run's slot alone."""
         session_key, run_generation, agent_holder = turn_ctx.session_key, turn_ctx.run_generation, turn_ctx.agent_holder
-        while agent_holder[0] is None:
-            await asyncio.sleep(0.05)
         if not session_key:
             return
-        if run_generation is not None and not self._is_session_run_current(session_key, run_generation):
+        run_still_current = self._run_still_current_fn(session_key, run_generation)
+        if not run_still_current():
             logger.info(
                 "Skipping stale agent promotion for %s — generation %s is no longer current",
                 session_key or "", run_generation,
             )
             return
         turn_state = self._session_state(session_key).turn
-        turn_state.agent, turn_state.ctx = agent_holder[0], turn_ctx
+        turn_state.ctx, turn_state.processing_event = turn_ctx, turn_ctx.processing_event
+        while agent_holder[0] is None:
+            await asyncio.sleep(0.05)
+        if not run_still_current():
+            return
+        turn_state.agent = agent_holder[0]
         if self._draining:
             self._update_runtime_status("draining")
 
@@ -3651,7 +3655,8 @@ class GatewayTurnMixin:
                 _mark_turn(turn_ctx.session_key, turn_ctx.run_generation)
 
     async def _run_agent_drain_pending(
-        self, result: Any, adapter: Any, source: SessionSource, session_key: Optional[str]
+        self, result: Any, adapter: Any, source: SessionSource, session_key: Optional[str],
+        processing_event: Optional[MessageEvent] = None,
     ) -> Tuple[Any, Optional[str]]:
         """Dequeue the adapter's pending / interrupt / leftover-steer follow-up as ``(pending_event, pending)``.
 
@@ -3692,6 +3697,10 @@ class GatewayTurnMixin:
         # Leftover /steer (arrived after the last tool batch): deliver as the next user turn.
         if result and not pending and not pending_event and result.get("pending_steer"):
             pending = result.get("pending_steer")
+            if processing_event is not None:
+                pending_input = processing_event._processing_state.take_pending_input()
+                if pending_input is not None:
+                    pending_event = dataclasses.replace(pending_input, text=pending, message_type=MessageType.TEXT)
             logger.debug("Delivering leftover /steer as next turn: '%s...'", pending[:40])
 
         # Safety net: a pending slash command is never passed to the agent as user input.
@@ -4340,7 +4349,8 @@ class GatewayTurnMixin:
             result = turn_ctx.result_holder[0]
             adapter = self._delivery_adapter_for(source)
             await self._run_agent_finalize_streaming_tts(turn_ctx, adapter)
-            pending_event, pending = await self._run_agent_drain_pending(result, adapter, source, session_key)
+            pending_event, pending = await self._run_agent_drain_pending(
+                result, adapter, source, session_key, processing_event=turn_ctx.processing_event)
             if pending_event or pending:
                 return await self._run_agent_queued_followup(
                     turn_ctx, adapter, pending, pending_event, response, result, stream_task,
