@@ -2989,16 +2989,11 @@ class MatrixAdapter(MatrixInboundEventMixin, MatrixMediaMixin, MatrixInvitesMixi
         return user_id
 
     def _markdown_to_html(self, text: str) -> str:
-        from plugins.platforms.matrix.rendering import (
-            _latex_to_tokens, _pre_sanitize_matrix_markdown,
-            _sanitize_matrix_html, _tokens_to_mx_maths,
-        )
-
         """Markdown → org.matrix.custom.html via ``markdown`` when installed, else the regex fallback."""
-        text = _pre_sanitize_matrix_markdown(text)
-        text, tex_store = _latex_to_tokens(text)
+        from plugins.platforms.matrix.rendering import _prepare_matrix_markdown, _sanitize_matrix_html, _tokens_to_mx_maths
+
+        text, tex_store = _prepare_matrix_markdown(text)
         with suppress(ImportError):
-            from plugins.platforms.matrix.rendering import _latex_to_tokens, _tokens_to_mx_maths
             import markdown as _md
             md = _md.Markdown(extensions=["fenced_code", "tables", "nl2br", "sane_lists"])
             if "html_block" in md.preprocessors:
