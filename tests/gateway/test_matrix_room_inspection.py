@@ -6,12 +6,42 @@ import json
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
+from urllib.parse import unquote
 
 import pytest
 
 from plugins.platforms.matrix.adapter import MatrixAdapter
 from plugins.platforms.matrix.room_inspection import inspect_matrix_room
 from plugins.platforms.matrix.reply_context import MatrixEventContext, MatrixEventContextCache
+
+
+class _NotFound(Exception):
+    errcode = "M_NOT_FOUND"
+
+
+def _state_type(path: Any) -> str | None:
+    parts = unquote(str(path)).rstrip("/").split("/state/")
+    return parts[1] if len(parts) == 2 else None
+
+
+def _state_api(state: dict[str, Any]) -> SimpleNamespace:
+    async def request(_method, path, *, query_params=None, **_kwargs):
+        event_type = _state_type(path)
+        if event_type == "m.room.create":
+            assert query_params == {"format": "event"}
+        if event_type not in state:
+            raise _NotFound()
+        return state[event_type]
+
+    return SimpleNamespace(request=AsyncMock(side_effect=request))
+
+
+def _create_event(version: str, sender: str = "@alice:server", **content: Any) -> dict[str, Any]:
+    return {
+        "type": "m.room.create", "state_key": "", "sender": sender, "event_id": "$create",
+        "room_id": "!room:server", "origin_server_ts": 1,
+        "content": {"room_version": version, **content},
+    }
 
 
 def _inspection_adapter(**attributes: Any) -> MatrixAdapter:
@@ -41,18 +71,16 @@ async def test_room_inspection_reports_state_members_permissions_and_pins():
         "m.room.pinned_events": {"pinned": ["$first", "$second"]},
     }
 
-    async def get_state_event(room_id, event_type, **kwargs):
-        return state[event_type]
-
     async def get_event(room_id, event_id):
         return {"event_id": event_id, "sender": "@alice:server", "type": "m.room.message",
                 "content": {"msgtype": "m.text", "body": f"Pinned {event_id}"}}
 
     async def request(_method, path, **kwargs):
+        if _state_type(path) is not None:
+            return await _state_api(state).request(_method, path, **kwargs)
         return await get_event("!room:server", "$first")
 
     client = SimpleNamespace(
-        get_state_event=AsyncMock(side_effect=get_state_event),
         get_joined_members=AsyncMock(return_value={
             "@bot:server": SimpleNamespace(displayname="Hermes", avatar_url=None),
             "@alice:server": SimpleNamespace(displayname="Alice", avatar_url="mxc://server/alice"),
@@ -96,7 +124,7 @@ async def test_room_inspection_reports_state_members_permissions_and_pins():
 
 @pytest.mark.asyncio
 async def test_room_inspection_rejects_unauthorized_requester_before_network():
-    client = SimpleNamespace(get_state_event=AsyncMock(), get_joined_members=AsyncMock())
+    client = SimpleNamespace(api=SimpleNamespace(request=AsyncMock()), get_joined_members=AsyncMock())
     adapter = _inspection_adapter(
         _client=client, _joined_rooms={"!room:server"}, _user_id="@bot:server",
         _is_allowed_matrix_room_event=AsyncMock(return_value=True),
@@ -108,22 +136,19 @@ async def test_room_inspection_rejects_unauthorized_requester_before_network():
                                        requester="@alice:server")
 
     assert result == {"error": "Matrix requester is not authorized for this room"}
-    client.get_state_event.assert_not_awaited()
+    client.api.request.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_room_permissions_include_version_12_creator_override():
-    async def get_state_event(room_id, event_type, **kwargs):
-        if event_type == "m.room.create":
-            assert kwargs == {"format": "event"}
-            return {"sender": "@bot:server", "content": {"room_version": "12"}}
-        if event_type == "m.room.encryption":
-            return {"algorithm": "m.megolm.v1.aes-sha2"}
-        return {"users_default": 0, "state_default": 50,
-                "events": {"m.room.pinned_events": 75, "m.room.encrypted": 25}}
-
+    api = _state_api({
+        "m.room.create": _create_event("12", "@bot:server"),
+        "m.room.encryption": {"algorithm": "m.megolm.v1.aes-sha2"},
+        "m.room.power_levels": {"users_default": 0, "state_default": 50,
+                                "events": {"m.room.pinned_events": 75, "m.room.encrypted": 25}},
+    })
     adapter = _inspection_adapter(
-        _client=SimpleNamespace(get_state_event=AsyncMock(side_effect=get_state_event)),
+        _client=SimpleNamespace(api=api),
         _joined_rooms={"!room:server"}, _user_id="@bot:server",
         _is_allowed_matrix_room_event=AsyncMock(return_value=True),
         _is_dm_room=AsyncMock(return_value=False),
@@ -150,24 +175,9 @@ async def test_old_room_power_levels_accept_numeric_strings():
         "events": {"m.room.pinned_events": " 075 ", "m.room.message": "+10"},
         "invite": " 25 ",
     }
-    try:
-        from mautrix.types import StateEvent
-    except ImportError:
-        pass
-    else:
-        power = StateEvent.deserialize_content({
-            **power, "__mautrix_event_type": "m.room.power_levels",
-        })
-
-    async def get_state_event(room_id, event_type, **kwargs):
-        if event_type == "m.room.create":
-            return {"sender": "@alice:server", "content": {"room_version": "9"}}
-        if event_type == "m.room.encryption":
-            return {}
-        return power
-
+    api = _state_api({"m.room.create": _create_event("9"), "m.room.power_levels": power})
     adapter = _inspection_adapter(
-        _client=SimpleNamespace(get_state_event=AsyncMock(side_effect=get_state_event)),
+        _client=SimpleNamespace(api=api),
         _joined_rooms={"!room:server"}, _user_id="@bot:server",
         _is_allowed_matrix_room_event=AsyncMock(return_value=True),
         _is_dm_room=AsyncMock(return_value=False),
@@ -190,17 +200,12 @@ async def test_old_room_power_levels_accept_numeric_strings():
 
 @pytest.mark.asyncio
 async def test_version_12_ignores_legacy_creator_property():
-    async def get_state_event(room_id, event_type, **kwargs):
-        if event_type == "m.room.create":
-            return {"sender": "@alice:server", "content": {
-                "room_version": "12", "creator": "@bot:server",
-            }}
-        if event_type == "m.room.encryption":
-            return {}
-        return {"users_default": 0, "events": {"m.room.pinned_events": 75}}
-
+    api = _state_api({
+        "m.room.create": _create_event("12", creator="@bot:server"),
+        "m.room.power_levels": {"users_default": 0, "events": {"m.room.pinned_events": 75}},
+    })
     adapter = _inspection_adapter(
-        _client=SimpleNamespace(get_state_event=AsyncMock(side_effect=get_state_event)),
+        _client=SimpleNamespace(api=api),
         _joined_rooms={"!room:server"}, _user_id="@bot:server",
         _is_allowed_matrix_room_event=AsyncMock(return_value=True),
         _is_dm_room=AsyncMock(return_value=False),
@@ -219,6 +224,64 @@ async def test_version_12_ignores_legacy_creator_property():
                      "kick": 50, "ban": 50, "redact_other": 50},
         "bot_can_edit_pins": False,
     }
+
+
+def _permissions(requester: tuple[int | None, bool | None], bot: tuple[int | None, bool | None],
+                 edit_pins: int, can_edit_pins: bool | None) -> dict[str, Any]:
+    return {
+        "requester": {"user_id": "@alice:server", "level": requester[0], "creator_override": requester[1]},
+        "bot": {"user_id": "@bot:server", "level": bot[0], "creator_override": bot[1]},
+        "required": {"send_message": 0, "send_event_type": "m.room.message", "edit_pins": edit_pins,
+                     "invite": 0, "kick": 50, "ban": 50, "redact_other": 50},
+        "bot_can_edit_pins": can_edit_pins,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("create", "power", "expected"), [
+    pytest.param(_create_event("10"), {"users": {"@alice:server": 100}},
+                 _permissions((100, False), (0, False), 50, False), id="power-levels-omit-defaults"),
+    pytest.param(_create_event("10"), None,
+                 _permissions((100, False), (0, False), 0, True), id="no-power-levels"),
+    pytest.param({"room_version": "10", "creator": "@alice:server"}, None,
+                 _permissions((100, False), (0, False), 0, True), id="content-only-create-v10"),
+    pytest.param({"room_version": "11"}, {"users": {"@alice:server": 100}},
+                 _permissions((100, False), (0, False), 50, False), id="content-only-create-v11"),
+    pytest.param({"room_version": "11"}, None,
+                 _permissions((None, False), (None, False), 0, None),
+                 id="content-only-create-v11-no-power-levels"),
+    pytest.param({"room_version": "12"}, {"users": {"@bot:server": 100}},
+                 _permissions((0, None), (100, None), 50, True), id="content-only-create-v12"),
+])
+async def test_permissions_apply_spec_defaults_to_raw_server_state(
+    create: dict[str, Any], power: dict[str, Any] | None, expected: dict[str, Any],
+):
+    pytest.importorskip("mautrix")
+    from mautrix.client.api import ClientAPI
+    from mautrix.errors import MNotFound
+
+    async def request(_method, path, *_args, query_params=None, **_kwargs):
+        event_type = unquote(str(path)).rstrip("/").rsplit("/", 1)[-1]
+        if event_type == "m.room.create":
+            full_event = "content" in create and query_params == {"format": "event"}
+            return create if full_event else create.get("content", create)
+        if event_type == "m.room.power_levels" and power is not None:
+            return power
+        raise MNotFound(404, "no state")
+
+    client = ClientAPI("@bot:server", api=SimpleNamespace(request=request, log=None))
+    adapter = _inspection_adapter(
+        _client=client, _joined_rooms={"!room:server"}, _user_id="@bot:server",
+        _is_allowed_matrix_room_event=AsyncMock(return_value=True),
+        _is_dm_room=AsyncMock(return_value=False),
+        _is_sender_authorized=lambda user, **kw: True,
+    )
+
+    result = await inspect_matrix_room(
+        adapter, "permissions", "!room:server", 20, requester="@alice:server"
+    )
+
+    assert result == expected
 
 
 @pytest.mark.asyncio
@@ -260,6 +323,8 @@ async def test_pin_snapshots_expose_effective_state_after_sibling_await(state: s
     started, release = asyncio.Event(), asyncio.Event()
 
     async def request(_method, path, **_kwargs):
+        if _state_type(path) == "m.room.pinned_events":
+            return {"pinned": ["$target", "$gate"]}
         event_id = "$gate" if path.endswith("%24gate") else "$target"
         if event_id == "$gate":
             started.set()
@@ -288,7 +353,6 @@ async def test_pin_snapshots_expose_effective_state_after_sibling_await(state: s
 
     client = SimpleNamespace(
         api=SimpleNamespace(request=request),
-        get_state_event=AsyncMock(return_value={"pinned": ["$target", "$gate"]}),
         get_event=AsyncMock(side_effect=get_event),
         crypto=SimpleNamespace(decrypt_megolm_event=decrypt, crypto_store=store),
     )
@@ -366,23 +430,21 @@ async def test_inspection_rechecks_owning_profile_session_and_policy_after_await
                 await release.wait()
                 mutation()
 
-        async def state(_room, event_type, **_kwargs):
-            await network_barrier(event_type)
-            if change == "policy-last-missing-state" and event_type == "m.room.encryption":
-                class MNotFound(Exception):
-                    pass
-                raise MNotFound()
-            return {
-                "m.room.name": {"name": label},
-                "m.room.create": {"sender": user, "content": {"room_version": "10"}},
-                "m.room.pinned_events": {"pinned": ["$pin"]},
-            }.get(event_type, {})
+        state = _state_api({
+            "m.room.name": {"name": label},
+            "m.room.create": _create_event("10", user),
+            "m.room.pinned_events": {"pinned": ["$pin"]},
+        })
 
         async def members(_room):
             await network_barrier()
             return {user: {"displayname": label}}
 
-        async def request(*_args, **_kwargs):
+        async def request(_method, path, **kwargs):
+            event_type = _state_type(path)
+            if event_type is not None:
+                await network_barrier(event_type)
+                return await state.request(_method, path, **kwargs)
             return {
                 "room_id": room, "event_id": "$pin", "sender": user,
                 "type": "m.room.message", "content": {"msgtype": "m.text", "body": label},
@@ -391,8 +453,7 @@ async def test_inspection_rechecks_owning_profile_session_and_policy_after_await
         client = SimpleNamespace(
             api=SimpleNamespace(request=request, base_url="https://server", token=label, session=object()),
             mxid=f"@bot-{label}:server", device_id=f"device-{label}", crypto=None,
-            get_state_event=state, get_joined_members=members,
-            get_event=AsyncMock(return_value=awaitable_pin(label)),
+            get_joined_members=members, get_event=AsyncMock(return_value=awaitable_pin(label)),
         )
         adapter = _inspection_adapter(
             _client=client, _event_context_cache=MatrixEventContextCache(), _joined_rooms={room},
@@ -477,9 +538,9 @@ async def test_inspection_rechecks_owning_profile_session_and_policy_after_await
             "permissions": {
                 "requester": {"user_id": user, "level": 100, "creator_override": False},
                 "bot": {"user_id": f"@bot-{label}:server", "level": 0, "creator_override": False},
-                "required": {"send_message": 0, "send_event_type": "m.room.message", "edit_pins": 50,
+                "required": {"send_message": 0, "send_event_type": "m.room.message", "edit_pins": 0,
                              "invite": 0, "kick": 50, "ban": 50, "redact_other": 50},
-                "bot_can_edit_pins": False,
+                "bot_can_edit_pins": True,
             },
             "pins": {"events": [{"event_id": "$pin", "sender": user, "body": label,
                                  "msgtype": "m.text", "thread_id": None, "timestamp": None,
@@ -532,16 +593,15 @@ async def test_final_admission_uses_current_matrix_policy_after_identity_await(
         network_complete = True
         return {requester: {"displayname": "Private profile"}}
 
-    async def state(_room, event_type, **_kwargs):
-        nonlocal network_complete
-        if event_type == "m.room.encryption":
-            network_complete = True
-            class MNotFound(Exception):
-                pass
-            raise MNotFound()
-        return {"name": "Private planning"} if event_type == "m.room.name" else {}
+    state = _state_api({"m.room.name": {"name": "Private planning"}})
 
-    adapter._client = SimpleNamespace(get_joined_members=members, get_state_event=state)
+    async def request(_method, path, **kwargs):
+        nonlocal network_complete
+        if _state_type(path) == "m.room.encryption":
+            network_complete = True
+        return await state.request(_method, path, **kwargs)
+
+    adapter._client = SimpleNamespace(get_joined_members=members, api=SimpleNamespace(request=request))
     adapter._is_dm_room = identity
     adapter._is_sender_authorized = lambda *_args, **_kwargs: sender_allowed
     pending = asyncio.create_task(inspect_matrix_room(

@@ -26,14 +26,30 @@ def _content(value: Any) -> dict[str, Any]:
     return {}
 
 
-async def _state(context: _InspectionContext, event_type: str) -> dict[str, Any]:
+async def _state_event(
+    context: _InspectionContext, event_type: str, query: dict[str, str] | None = None,
+) -> Any:
+    # Read raw JSON instead of using mautrix's get_state_event. Its typed
+    # contents fill in mautrix defaults, which differ from the spec for
+    # `invite`, and it raises when a server ignores `format=event` and
+    # returns the content only.
+    path = (
+        f"/_matrix/client/v3/rooms/{quote(context.room_id, safe='')}"
+        f"/state/{quote(event_type, safe='')}/"
+    )
+    return await context.request(
+        lambda: context.client.api.request(Method.GET, path, query_params=query),
+    )
+
+
+async def _state(context: _InspectionContext, event_type: str) -> dict[str, Any] | None:
     try:
-        value = await context.request(lambda: context.client.get_state_event(context.room_id, event_type))
+        value = await _state_event(context, event_type)
     except Exception as exc:
         if getattr(exc, "errcode", None) == "M_NOT_FOUND" or type(exc).__name__ == "MNotFound":
-            return {}
+            return None
         raise
-    return _content(value)
+    return value if isinstance(value, dict) else {}
 
 
 def _text(content: dict[str, Any], field: str) -> str | None:
@@ -60,64 +76,94 @@ def _user_level(content: dict[str, Any], user_id: str, legacy_strings: bool) -> 
     return _numeric_level(users.get(user_id), default, legacy_strings)
 
 
+@dataclass(frozen=True)
+class _RoomCreate:
+    numeric_version: int | None
+    creators: frozenset[str]
+    creators_known: bool
+
+    @classmethod
+    def parse(cls, response: Any) -> _RoomCreate:
+        response = response if isinstance(response, dict) else {}
+        full_event = response.get("type") == "m.room.create" and isinstance(response.get("content"), dict)
+        content = response["content"] if full_event else response
+        room_version = _text(content, "room_version") or "1"
+        numeric_version = int(room_version) if room_version.isdecimal() else None
+        creator = response.get("sender") if full_event else None
+        if creator is None and numeric_version is not None and numeric_version < 11:
+            creator = content.get("creator")
+        creators = {creator} if isinstance(creator, str) else set()
+        additional = content.get("additional_creators")
+        if numeric_version is not None and numeric_version >= 12 and isinstance(additional, list):
+            creators.update(value for value in additional if isinstance(value, str))
+        return cls(numeric_version, frozenset(creators), isinstance(creator, str))
+
+    @property
+    def legacy_string_levels(self) -> bool:
+        return self.numeric_version is not None and self.numeric_version <= 9
+
+    @property
+    def creator_override(self) -> bool:
+        return self.numeric_version is not None and self.numeric_version >= 12
+
+    def is_creator(self, user_id: str) -> bool | None:
+        if user_id in self.creators:
+            return True
+        return False if self.creators_known else None
+
+
+def _user_permissions(
+    user_id: str, power: dict[str, Any] | None, create: _RoomCreate,
+) -> tuple[int | None, bool | None]:
+    is_creator = create.is_creator(user_id)
+    if create.creator_override:
+        return _user_level(power or {}, user_id, create.legacy_string_levels), is_creator
+    if power is not None:
+        return _user_level(power, user_id, create.legacy_string_levels), False
+    if is_creator is None:
+        return None, False
+    return (100 if is_creator else 0), False
+
+
 async def _permissions(context: _InspectionContext) -> dict[str, Any]:
     requester, bot = context.requester, context.owner.bot_id
     power = await _state(context, "m.room.power_levels")
-    encryption = await _state(context, "m.room.encryption")
-    create_event = await context.request(
-        lambda: context.client.get_state_event(context.room_id, "m.room.create", format="event"),
-    )
-    create = _content(create_event)
-    room_version = _text(create, "room_version") or "1"
-    numeric_version = int(room_version) if room_version.isdecimal() else None
-    legacy_strings = numeric_version is not None and numeric_version <= 9
-    events = power.get("events")
+    encryption = await _state(context, "m.room.encryption") or {}
+    create = _RoomCreate.parse(await _state_event(context, "m.room.create", {"format": "event"}))
+    legacy_strings = create.legacy_string_levels
+    levels = power or {}
+    events = levels.get("events")
     events = events if isinstance(events, dict) else {}
     pin_level = _numeric_level(
         events.get("m.room.pinned_events"),
-        _level(power, "state_default", 50, legacy_strings), legacy_strings,
+        _level(levels, "state_default", 0 if power is None else 50, legacy_strings), legacy_strings,
     )
     send_event_type = "m.room.encrypted" if _text(encryption, "algorithm") else "m.room.message"
     message_level = _numeric_level(
         events.get(send_event_type),
-        _level(power, "events_default", 0, legacy_strings), legacy_strings,
+        _level(levels, "events_default", 0, legacy_strings), legacy_strings,
     )
-    bot_level = _user_level(power, bot, legacy_strings)
-    requester_level = _user_level(power, requester, legacy_strings)
-    creator_ids: set[str] = set()
-    creator_sender = getattr(create_event, "sender", None)
-    if isinstance(create_event, dict):
-        creator_sender = create_event.get("sender")
-    if isinstance(creator_sender, str):
-        creator_ids.add(creator_sender)
-    elif numeric_version is not None and numeric_version < 11:
-        legacy_creator = create.get("creator")
-        if isinstance(legacy_creator, str):
-            creator_ids.add(legacy_creator)
-    creator_override = numeric_version is not None and numeric_version >= 12
-    if creator_override:
-        additional = create.get("additional_creators")
-        if isinstance(additional, list):
-            creator_ids.update(value for value in additional if isinstance(value, str))
-    if not power and bot in creator_ids and not creator_override:
-        bot_level = 100
-    if not power and requester in creator_ids and not creator_override:
-        requester_level = 100
-    bot_is_creator = bot in creator_ids and creator_override
+    requester_level, requester_override = _user_permissions(requester, power, create)
+    bot_level, bot_override = _user_permissions(bot, power, create)
+    bot_can_edit_pins: bool | None = False
+    if bot_override or (bot_level is not None and bot_level >= pin_level):
+        bot_can_edit_pins = True
+    elif bot_level is None or bot_override is None:
+        bot_can_edit_pins = None
     return {
         "requester": {"user_id": requester, "level": requester_level,
-                      "creator_override": requester in creator_ids and creator_override},
-        "bot": {"user_id": bot, "level": bot_level, "creator_override": bot_is_creator},
+                      "creator_override": requester_override},
+        "bot": {"user_id": bot, "level": bot_level, "creator_override": bot_override},
         "required": {
             "send_message": message_level,
             "send_event_type": send_event_type,
             "edit_pins": pin_level,
-            "invite": _level(power, "invite", 0, legacy_strings),
-            "kick": _level(power, "kick", 50, legacy_strings),
-            "ban": _level(power, "ban", 50, legacy_strings),
-            "redact_other": _level(power, "redact", 50, legacy_strings),
+            "invite": _level(levels, "invite", 0, legacy_strings),
+            "kick": _level(levels, "kick", 50, legacy_strings),
+            "ban": _level(levels, "ban", 50, legacy_strings),
+            "redact_other": _level(levels, "redact", 50, legacy_strings),
         },
-        "bot_can_edit_pins": bot_is_creator or bot_level >= pin_level,
+        "bot_can_edit_pins": bot_can_edit_pins,
     }
 
 
@@ -271,7 +317,7 @@ async def _inspect_state(context: _InspectionContext) -> dict[str, Any]:
     }
     result = {"room_id": context.room_id}
     for key, (event_type, field) in fields.items():
-        result[key] = _text(await _state(context, event_type), field)
+        result[key] = _text(await _state(context, event_type) or {}, field)
     return result
 
 
@@ -298,7 +344,7 @@ async def _inspect_pins(context: _InspectionContext) -> dict[str, Any]:
     cache = context.owner.cache
     assert cache is not None
     cached = cache.snapshot(context.room_id)
-    pinned = await _state(context, "m.room.pinned_events")
+    pinned = await _state(context, "m.room.pinned_events") or {}
     event_ids = pinned.get("pinned")
     if not isinstance(event_ids, list) or not all(isinstance(value, str) for value in event_ids):
         event_ids = []
