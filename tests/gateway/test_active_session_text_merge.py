@@ -246,3 +246,30 @@ async def test_control_and_clarify_messages_bypass_text_debounce():
     adapter._message_handler.assert_awaited_once_with(answer)
     assert session_key not in adapter._text_debounce
     assert session_key not in adapter._pending_messages
+
+
+@pytest.mark.parametrize("media_urls,media_types", [
+    ([], []),
+    (["/tmp/q.png"], ["image/png"]),
+])
+@pytest.mark.asyncio
+async def test_busy_text_debounce_keeps_incoming_reply_context(media_urls, media_types):
+    adapter = _make_adapter()
+    first = _make_event("one")
+    second = _make_event("two")
+    second.media_urls, second.media_types = list(media_urls), list(media_types)
+    second.reply_to_message_id, second.reply_to_text = "$earlier", "earlier answer"
+    second.reply_to_author_id, second.reply_to_author_name = "u2", "Alice"
+    session_key = build_session_key(first.source)
+    adapter._active_sessions[session_key] = asyncio.Event()
+
+    await adapter.handle_message(first)
+    await adapter.handle_message(second)
+    await adapter._flush_text_debounce_now(session_key)
+
+    pending = adapter._pending_messages[session_key]
+    assert (
+        pending.text, pending.message_id, pending.media_urls, pending.reply_to_message_id,
+        pending.reply_to_text, pending.reply_to_author_id, pending.reply_to_author_name,
+        pending.reply_to_is_own_message,
+    ) == ("one\ntwo", "msg-two", media_urls, "$earlier", "earlier answer", "u2", "Alice", False)

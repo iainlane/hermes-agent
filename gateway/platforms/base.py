@@ -3818,12 +3818,17 @@ class BasePlatformAdapter(ABC):
         else:
             if event.text:
                 state.event.text = _append_text(state.event.text, event.text)
+            if event.media_urls:
+                state.event.media_urls.extend(event.media_urls)
+                state.event.media_types.extend(event.media_types)
+            state.event.absorb_reply_context(event)
             state.event.absorb_reply_expected(event)
             latest_message_id = getattr(event, "message_id", None)
             latest_anchor = latest_message_id or getattr(event, "reply_to_message_id", None)
             if latest_message_id is not None:
                 state.event.message_id = str(latest_message_id)
-            if latest_anchor is not None and hasattr(state.event, "reply_to_message_id"):
+            # While reply_to_text is set, reply_to_message_id identifies the quoted message.
+            if latest_anchor is not None and not state.event.reply_to_text:
                 state.event.reply_to_message_id = str(latest_anchor)
             state.last_ts = now
         state.cancel_timer()
