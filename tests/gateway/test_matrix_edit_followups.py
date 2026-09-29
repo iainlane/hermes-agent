@@ -13,7 +13,7 @@ import pytest
 from gateway.config import GatewayConfig, PlatformConfig
 from gateway.run import GatewayRunner
 from gateway.run_busy import GatewayBusySessionMixin
-from gateway.platforms.event import MessageEvent, MessageType
+from gateway.platforms.event import MessageEvent, MessageType, ProcessingOutcome
 from plugins.platforms.matrix.adapter import MatrixAdapter
 
 
@@ -325,3 +325,27 @@ async def test_correction_leaves_thread_fallback_and_receipts_the_edit(monkeypat
     assert (validated, receipts, adapter._thread_fallbacks.latest(ROOM, "$original-thread")) == (
         [True] if authorized else [], [(ROOM, "$edit")] if authorized else [], "$latest-reply",
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("corrected", [True, False], ids=["correction", "ordinary"])
+async def test_lifecycle_reactions_appear_on_the_visible_message(monkeypatch, corrected):
+    adapter = adapter_for(monkeypatch, {ROOM: True})
+    adapter.handle_message = AsyncMock()
+    if corrected:
+        await adapter._on_room_message(edit_event())
+        event = adapter.handle_message.await_args.args[0]
+    else:
+        event = await adapter._build_inbound_event(
+            ROOM, ALICE, "$new", "question", {"msgtype": "m.text", "body": "question"}, {},
+        )
+    adapter._send_reaction = AsyncMock(return_value="$eyes")
+    adapter._schedule_reaction_redaction = lambda *args: None
+
+    await adapter.on_processing_start(event)
+    await adapter.on_processing_complete(event, ProcessingOutcome.SUCCESS)
+
+    target = "$original" if corrected else "$new"
+    assert [call.args for call in adapter._send_reaction.await_args_list] == [
+        (ROOM, target, "\U0001f440"), (ROOM, target, "\u2705"),
+    ]
