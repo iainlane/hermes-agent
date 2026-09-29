@@ -285,6 +285,32 @@ async def test_permissions_apply_spec_defaults_to_raw_server_state(
 
 
 @pytest.mark.asyncio
+async def test_cancelled_inspection_stays_cancelled_when_final_admission_fails():
+    started = asyncio.Event()
+
+    async def get_joined_members(_room):
+        started.set()
+        await asyncio.Event().wait()
+
+    adapter = _inspection_adapter(
+        _client=SimpleNamespace(get_joined_members=get_joined_members), _closing=False,
+        _joined_rooms={"!room:server"}, _user_id="@bot:server",
+        _is_allowed_matrix_room_event=AsyncMock(return_value=True),
+        _is_dm_room=AsyncMock(return_value=False),
+        _is_sender_authorized=lambda user, **kw: True,
+    )
+    pending = asyncio.create_task(
+        inspect_matrix_room(adapter, "members", "!room:server", 20, requester="@alice:server")
+    )
+    await asyncio.wait_for(started.wait(), timeout=2)
+    adapter._closing = True
+    pending.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(pending, timeout=2)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("state", [
     "plain", "edited", "redacted", "encrypted", "encrypted-edited", "encrypted-redacted",
     "missing-key", "withdrawn-original", "withdrawn-edit",

@@ -268,9 +268,12 @@ class _InspectionContext:
     async def request(self, operation: Callable[[], Awaitable[Any]]) -> Any:
         await self.check_access()
         try:
-            return await asyncio.wait_for(operation(), timeout=10.0)
-        finally:
+            result = await asyncio.wait_for(operation(), timeout=10.0)
+        except Exception:
             await self.check_access()
+            raise
+        await self.check_access()
+        return result
 
 
 async def _pinned_event(context: _InspectionContext, event_id: str) -> MatrixReadEvent:
