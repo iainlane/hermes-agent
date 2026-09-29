@@ -88,7 +88,7 @@ from plugins.platforms.matrix.room_context import (
 )
 from plugins.platforms.matrix.relations import MatrixRelation
 from plugins.platforms.matrix.effective_event import event_content
-from plugins.platforms.matrix.rich_content import MatrixRichContentMixin, inbound_event
+from plugins.platforms.matrix.rich_content import MatrixRichContentMixin
 from plugins.platforms.matrix.context_mixin import MatrixContextMixin
 from plugins.platforms.matrix.reply_context import (
     MatrixEventContext, MatrixEventContextCache, MatrixReplyContext, extract_mx_reply_quote, _label_body,
@@ -2053,7 +2053,6 @@ class MatrixAdapter(MatrixRichContentMixin, MatrixContextMixin, BasePlatformAdap
             self._clock_skew_warned = True
 
     async def _on_room_message(self, event: Any) -> None:
-        event = inbound_event(event)
         room_id = str(getattr(event, "room_id", ""))
         sender = str(getattr(event, "sender", ""))
         # DEBUG-level proof the callback fires at all (silent-inbound troubleshooting).

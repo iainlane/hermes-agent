@@ -95,6 +95,10 @@ def _event(kind: str) -> dict:
     }
 
 
+def _typed(raw: dict):
+    return pytest.importorskip("mautrix.types").Event.deserialize(deepcopy(raw))
+
+
 def _body(kind: str) -> str:
     return (
         f"[emote by {SENDER}] /new waves"
@@ -135,9 +139,8 @@ def _body(kind: str) -> str:
         )
     ],
 )
-@pytest.mark.parametrize("typed", [False, True])
 async def test_native_content_reaches_model_with_actor_description_and_pixels(
-    monkeypatch, kind, scenario, typed
+    monkeypatch, kind, scenario
 ):
     adapter, received = _adapter(monkeypatch)
     raw = _event(kind)
@@ -198,12 +201,7 @@ async def test_native_content_reaches_model_with_actor_description_and_pixels(
             "hashes": {},
             "v": "v2",
         }
-    incoming = (
-        pytest.importorskip("mautrix.types").Event.deserialize(deepcopy(raw))
-        if typed
-        else raw
-    )
-    await adapter._on_room_message(incoming)
+    await adapter._on_room_message(_typed(raw))
     if scenario.endswith("denied"):
         assert (
             received.await_count,
@@ -285,7 +283,7 @@ async def test_native_content_reaches_model_with_actor_description_and_pixels(
         )
         if kind == "emote":
             replacement["msgtype"] = "m.emote"
-        await adapter._on_room_message({
+        edit = {
             **raw,
             "event_id": "$edit",
             "content": {
@@ -294,7 +292,15 @@ async def test_native_content_reaches_model_with_actor_description_and_pixels(
                 "m.new_content": replacement,
                 "m.relates_to": {"rel_type": "m.replace", "event_id": "$native"},
             },
-        })
+        }
+
+        async def edited(_method, path, **_kwargs):
+            if "/event/" in path:
+                return {**raw, "unsigned": {"m.relations": {"m.replace": edit}}}
+            return {"chunk": []}
+
+        adapter._client.api.request.side_effect = edited
+        await adapter._on_room_message(_typed(edit))
     prepared = await runner._prepare_inbound_message_text(
         event=event,
         source=event.source,
@@ -475,7 +481,7 @@ async def test_coalesced_native_content_revalidates_each_authored_event(
         if kind == "text":
             raw["type"] = "m.room.message"
             raw["content"]["msgtype"] = "m.text"
-        incoming = pytest.importorskip("mautrix.types").Event.deserialize(deepcopy(raw))
+        incoming = _typed(raw)
         await adapter._on_room_message(incoming)
         admitted.append(received.await_args.args[0])
     expected_text = [event.text for event in admitted]
@@ -552,7 +558,7 @@ async def test_unchanged_effective_read_preserves_mention_stripped_native_input(
         body="@hermes:example.org Friendly fox",
         **{"m.mentions": {"user_ids": ["@hermes:example.org"]}},
     )
-    incoming = pytest.importorskip("mautrix.types").Event.deserialize(deepcopy(raw))
+    incoming = _typed(raw)
     await adapter._on_room_message(incoming)
     event = received.await_args.args[0]
     original = {"text": event.text, "paths": list(event.authored_media().media_urls)}
