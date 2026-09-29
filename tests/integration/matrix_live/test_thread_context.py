@@ -10,7 +10,8 @@ from collections.abc import Callable
 import pytest
 from nio import RoomMessageText, RoomSendResponse
 
-from tests.integration.matrix_live.conftest import GatewaySettings, LiveGateway, LiveRoom
+from tests.integration.matrix_live.conftest import GatewaySettings, LiveRoom
+from tests.integration.matrix_live.live_gateway import LiveGateway
 
 
 def test_thread_fallback_keeps_model_context_in_its_thread(
@@ -28,7 +29,10 @@ def test_thread_fallback_keeps_model_context_in_its_thread(
                 root = await client.room_send(
                     live_room.room_id,
                     "m.room.message",
-                    {"msgtype": "m.notice", "body": f"Thread {label} root [root:{label}]"},
+                    {
+                        "msgtype": "m.notice",
+                        "body": f"Thread {label} root [root:{label}]",
+                    },
                 )
                 assert isinstance(root, RoomSendResponse), root
                 body = (
@@ -40,9 +44,11 @@ def test_thread_fallback_keeps_model_context_in_its_thread(
                     live_room.room_id,
                     "m.room.message",
                     {
-                        "msgtype": "m.text", "body": body,
+                        "msgtype": "m.text",
+                        "body": body,
                         "m.relates_to": {
-                            "rel_type": "m.thread", "event_id": root.event_id,
+                            "rel_type": "m.thread",
+                            "event_id": root.event_id,
                             "is_falling_back": True,
                             "m.in_reply_to": {"event_id": root.event_id},
                         },
@@ -55,8 +61,10 @@ def test_thread_fallback_keeps_model_context_in_its_thread(
                     joined = response.rooms.join.get(live_room.room_id)
                     if joined:
                         bot_replies.update(
-                            event.event_id for event in joined.timeline.events
-                            if isinstance(event, RoomMessageText) and event.sender == live_room.bot.user_id
+                            event.event_id
+                            for event in joined.timeline.events
+                            if isinstance(event, RoomMessageText)
+                            and event.sender == live_room.bot.user_id
                         )
                     if len(bot_replies) >= (1 if label == "A" else 2):
                         return
@@ -67,7 +75,10 @@ def test_thread_fallback_keeps_model_context_in_its_thread(
                 except asyncio.TimeoutError:
                     pytest.fail(
                         f"No Matrix thread {label} reply after 15 seconds. Gateway logs:\n"
-                        + gateway.container.get_wrapped_container().logs().decode(errors="replace")[-6000:]
+                        + gateway.container
+                        .get_wrapped_container()
+                        .logs()
+                        .decode(errors="replace")[-6000:]
                     )
 
             requests = gateway.model.main_requests()
