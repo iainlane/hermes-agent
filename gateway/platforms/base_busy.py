@@ -101,6 +101,8 @@ class BaseBusyMixin:
                     await self._run_processing_hook("on_inline_processing_complete", event, ProcessingOutcome.FAILURE)
                     logger.error("[%s] Clarify text-intercept dispatch failed: %s", self.name, e, exc_info=True)
                 return
+        if event._queue_at_turn_boundary:
+            await self._flush_text_debounce_now(session_key)
         reservation = reserve_pending_dispatch(self, session_key, event, accepted=False)
         reservation.task = asyncio.current_task()
         try:
