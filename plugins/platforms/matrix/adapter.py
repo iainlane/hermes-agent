@@ -177,6 +177,7 @@ from plugins.platforms.matrix.room_admin import administer_matrix_pin, administe
 from plugins.platforms.matrix.image_packs import matrix_image_packs
 from plugins.platforms.matrix.unread import MatrixUnreadState
 from plugins.platforms.matrix.permalinks import MatrixPermalinkRouting
+from plugins.platforms.matrix.poll_actions import matrix_poll_action
 from gateway.platforms.base import (
     gateway_trust_env, BasePlatformAdapter,
     SendResult, classify_send_error, resolve_proxy_url, proxy_kwargs_for_aiohttp, _ssrf_redirect_guard,
@@ -2312,6 +2313,9 @@ class MatrixAdapter(MatrixThreadCreateMixin, MatrixApprovalMixin, MatrixReaction
             self, action, room_id, event_id, requester=requester,
             interrupt_check=interrupt_check, before_write=before_write,
         )
+
+    async def matrix_poll_action(self, room_id: str, requester: str, action: str, args: dict) -> dict:
+        return await matrix_poll_action(self, room_id, requester, action, args)
 
     async def _fetch_m_direct(self, *, log_failure: bool = False, require_dict: bool = False):
         """Return the m.direct account-data mapping, or None when absent/unreadable."""
