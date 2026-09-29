@@ -660,9 +660,15 @@ class GatewayBusySessionMixin:
         """Send a busy-path reply anchored to the event (thread metadata included)."""
         reply_anchor = self._reply_anchor_for_event(event)
         return await adapter._send_with_retry(
-            chat_id=event.source.chat_id, content=content,
-            reply_to=reply_anchor if plain_anchor else self._busy_reply_to(event, reply_anchor),
-            metadata=self._thread_metadata_for_source(event.source, reply_anchor),
+            chat_id=event.source.chat_id,
+            content=content,
+            reply_to=reply_anchor
+            if plain_anchor
+            else self._busy_reply_to(event, reply_anchor),
+            metadata={
+                **(self._thread_metadata_for_source(event.source, reply_anchor) or {}),
+                "_notice_reply": True,
+            },
         )
 
     async def _send_busy_drain_notice(self: "GatewayRunner", event: MessageEvent, session_key: str, effective_mode: str) -> None:
