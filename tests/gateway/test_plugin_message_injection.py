@@ -183,6 +183,43 @@ async def test_dispatch_uses_stored_origin_and_adapter_message_path():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["compressed", "reset"])
+async def test_pinned_injection_follows_compression_but_not_reset(tmp_path, route, request):
+    """Compression continues the pinned conversation; /new ends it."""
+    store = SessionStore(sessions_dir=tmp_path / "sessions", config=GatewayConfig())
+    request.addfinalizer(store.close_all_db_handles)
+    entry = store.get_or_create_session(_entry().origin)
+    parent = entry.session_id
+    adapter = SimpleNamespace(handle_message=AsyncMock())
+    runner = _runner(None, adapter)
+    runner.config = GatewayConfig()
+    runner.session_store = store
+    runner._deliver_platform_notice = AsyncMock()
+
+    assert await runner._dispatch_plugin_message_injection(
+        session_key=entry.session_key, content="deploy finished", plugin_id="notify-plugin",
+    ) is True
+    [event] = [call.args[0] for call in adapter.handle_message.await_args_list]
+
+    if route == "compressed":
+        db = store._db_for_key(entry.session_key)
+        db.end_session(parent, "compression")
+        db.create_session("compressed-child", source="telegram", parent_session_id=parent)
+        entry.session_id = "compressed-child"
+        store._save()
+    else:
+        store.reset_session(entry.session_key)
+    current = store.lookup_by_session_key(entry.session_key).session_id
+
+    resolved = await runner._hmwa_resolve_session(event, event.source)
+
+    observed = (None if resolved is None else resolved[1].session_id,
+                runner._deliver_platform_notice.await_count)
+    assert observed == {"compressed": ("compressed-child", 0), "reset": (None, 0)}[route]
+    assert current != parent
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("entry", "with_adapter"),
     [
