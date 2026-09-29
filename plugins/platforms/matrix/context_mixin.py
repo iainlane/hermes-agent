@@ -41,9 +41,8 @@ class MatrixContextMixin:
     ) -> str | None:
         """Canonical matrix.to permalink for a room/event pair.
 
-        ``event_id`` should be the thread root when the message lives in a thread (stable anchor
-        that opens the thread), else the triggering event. The ``via`` parameter specifies the
-        server name, derived from the room ID when the caller has none. None when no event.
+        The ``via`` parameter specifies the server name, derived from the room ID when the caller
+        has none. None when no event.
         """
         if not event_id:
             return None
