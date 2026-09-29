@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from urllib.parse import quote, urlencode
-
 from typing import TYPE_CHECKING, Any, Callable, Collection, Dict, Optional
 from contextlib import suppress
 import asyncio
@@ -35,23 +33,6 @@ _ROOM_NAME_STATE_KEYS = {"m.room.name": "name", "m.room.topic": "topic", "m.room
 
 
 class MatrixContextMixin:
-    @staticmethod
-    def _build_source_permalink(
-        room_id: str, event_id: str | None, server_name: str | None = None
-    ) -> str | None:
-        """Canonical matrix.to permalink for a room/event pair.
-
-        The ``via`` parameter specifies the server name, derived from the room ID when the caller
-        has none. None when no event.
-        """
-        if not event_id:
-            return None
-        via = server_name or (room_id.partition(":")[2].strip() or None if ":" in room_id else None)
-        permalink = (
-            f"https://matrix.to/#/{quote(room_id, safe='!$:@')}/"
-            f"{quote(event_id, safe='!$:@')}"
-        )
-        return f"{permalink}?{urlencode({'via': via})}" if via else permalink
 
     _client: Any
     _user_id: str
