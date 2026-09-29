@@ -1392,13 +1392,12 @@ class MatrixAdapter(MatrixThreadCreateMixin, MatrixApprovalMixin, MatrixReaction
             RoomID(chat_id), EventType.ROOM_MESSAGE, msg_content)
         event_id = await asyncio.wait_for(delivery, timeout=45)
         event_id = str(event_id)
-        if access is not None:
-            access.check(event_id)
-        self._event_context_cache.store(
-            chat_id, event_id, MatrixEventContext(self._user_id or "", msg_content["body"])
-        )
+        sender = access.user_id if access is not None else self._user_id
+        self._event_context_cache.store(chat_id, event_id, MatrixEventContext(sender or "", msg_content["body"]))
         self._thread_fallbacks.remember_sent(chat_id, msg_content, event_id, notice=notice)
         self._remember_followup_delivery(chat_id, event_id, msg_content, finalize=finalize)
+        if access is not None:
+            access.check(event_id)
         return event_id
 
 
