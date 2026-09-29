@@ -11,6 +11,7 @@ from contextvars import Context, copy_context
 from dataclasses import dataclass, field
 from typing import Any, TYPE_CHECKING, TypeVar
 
+from agent.i18n import t
 from gateway.platforms.base import ExecApprovalPrompt, SendResult
 
 if TYPE_CHECKING:
@@ -178,7 +179,6 @@ class MatrixApprovalMixin:
 
     async def _handle_approval_reaction(self, room_id: str, reacts_to: str, key: str, sender: str) -> bool:
         """Resolve a pending exec-approval prompt from a reaction. True if it was the target."""
-
         prompt = self._approval_prompts_by_event.get(reacts_to)
         if prompt is None:
             return False
@@ -195,8 +195,6 @@ class MatrixApprovalMixin:
     async def _resolve_matrix_approval_reaction(
         self, room_id: str, reacts_to: str, key: str, sender: str, prompt: _MatrixApprovalPrompt,
     ) -> bool:
-        from .adapter import t
-
         choices = {
             emoji: choice for emoji, choice in self._approval_reaction_map.items()
             if choice in {"once", "deny"}
@@ -518,8 +516,6 @@ class MatrixApprovalMixin:
         target_event_id: str,
         prompt: "_MatrixApprovalPrompt",
     ) -> None:
-        from .adapter import t
-
         from tools.approval import consume_gateway_approval_outcome, resolve_gateway_approval
 
         resolve_gateway_approval(prompt.session_key, "deny", approval_id=prompt.approval_id)
