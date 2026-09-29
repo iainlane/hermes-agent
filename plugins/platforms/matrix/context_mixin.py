@@ -16,7 +16,7 @@ from plugins.platforms.matrix.relations import MatrixRelation
 from plugins.platforms.matrix.reply_context import MatrixEventContextCache
 from plugins.platforms.matrix.room_context import MatrixHistoryContext, MatrixRoomIdentity, MatrixRoomState, fetch_room_entries
 from plugins.platforms.matrix.discovery import discover_matrix
-from plugins.platforms.matrix.unread import ReadTarget, mark_matrix_read, read_matrix_unread
+from plugins.platforms.matrix.unread import mark_matrix_read, read_matrix_unread
 from plugins.platforms.matrix.room_access import (
     LiveRoomClient, RoomClassificationUnavailable, RoomClientChanged, RoomClientOwner, RoomClientScope,
 )
@@ -433,6 +433,6 @@ class MatrixContextMixin:
         return await read_matrix_unread(self, room_id, thread_id, requester=requester)
 
     async def mark_matrix_read(
-        self: MatrixAdapter, room_id: str, event_id: str, thread_id: str, visibility: str, *, requester: str,
+        self: MatrixAdapter, room_id: str, event_id: object, thread_id: object, visibility: object, *, requester: str,
     ) -> dict[str, Any]:
-        return await mark_matrix_read(self, ReadTarget(room_id, event_id, thread_id, visibility, requester))
+        return await mark_matrix_read(self, room_id, event_id, thread_id, visibility, requester=requester)
