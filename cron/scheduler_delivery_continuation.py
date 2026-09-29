@@ -148,7 +148,7 @@ def _maybe_mirror_cron_delivery(
         ok = mirror_to_session(
             platform_name, str(chat_id), _cron_mirror_message(job, text),
             source_label="cron", thread_id=thread_id, user_id=user_id, role="user",
-            **({"chat_type": chat_type} if platform_name == "matrix" else {}))
+            **({"chat_type": chat_type} if chat_type else {}))
         if ok:
             logger.info(
                 "Job '%s': mirrored delivery into %s:%s session transcript",
@@ -224,23 +224,14 @@ def _seed_cron_session(
                 chat_type=chat_type,
                 user_id=user_id, user_name=user_name, thread_id=thread_id,
                 scope_id=str(scope_id) if scope_id else None)
-            _entry = None
-            if platform_enum == Platform.MATRIX:
-                participant_isolated = (
-                    dest_source.chat_type != "dm"
-                    and session_store.config.group_sessions_per_user
-                    and (
-                        not dest_source.thread_id
-                        or session_store.config.thread_sessions_per_user
-                    )
-                )
-                if participant_isolated:
-                    _entry = session_store.lookup_by_session_key(
-                        session_store._generate_session_key(dest_source)
-                    )
-                    if _entry is None:
-                        return False
-            if _entry is None:
+            if destination_source is not None and session_store.config.isolates_participant(
+                    dest_source.chat_type, dest_source.thread_id):
+                # A resolved destination seeds only an existing participant session.
+                _entry = session_store.lookup_by_session_key(
+                    session_store._generate_session_key(dest_source))
+                if _entry is None:
+                    return False
+            else:
                 _entry = session_store.get_or_create_session(dest_source)
             seeded_session_id = getattr(_entry, "session_id", None)
     return mirror_to_session(
@@ -263,12 +254,12 @@ def _seed_cron_thread_session(
     text = (mirror_text or "").strip()
     if not text:
         return
-    session_config = getattr(getattr(adapter, "_session_store", None), "config", None)
+    chat_type = "dm" if is_dm else _THREAD_REPLY_CHAT_TYPE.get(platform_name.lower(), "thread")
+    session_store = getattr(adapter, "_session_store", None)
     if (
-        not is_dm
-        and getattr(session_config, "group_sessions_per_user", True) is not False
-        and getattr(session_config, "thread_sessions_per_user", False) is True
-        and not user_id
+        not user_id
+        and session_store is not None
+        and session_store.config.isolates_participant(chat_type, thread_id)
     ):
         logger.warning(
             "Job '%s': thread seed skipped for %s:%s thread=%s without an originating participant",
@@ -279,7 +270,7 @@ def _seed_cron_thread_session(
         ok = _seed_cron_session(
             job, adapter, platform_name, chat_id, text,
             thread_id=str(thread_id),
-            chat_type="dm" if is_dm else _THREAD_REPLY_CHAT_TYPE.get(platform_name.lower(), "thread"),
+            chat_type=chat_type,
             user_id=user_id or "system:cron", user_name=None if user_id else "Cron",
             chat_name=chat_name, scope_id=scope_id,
             discord_keys_on_thread=True, destination_source=destination_source)
@@ -334,29 +325,48 @@ def _seed_cron_channel_session(
         return False
 
 
+def _resolved_destination_unchanged(t: _TargetDelivery) -> bool:
+    """Whether the resolved destination still has the chat type it had before sending. The
+    seeds and the mirror use that chat type, so a changed or unconfirmed one skips them."""
+    from cron.scheduler_delivery_destination import resolve_live_destination
+
+    source = t.resolved_source
+    reason = None
+    if source.chat_type == "unknown":
+        reason = "the destination's chat type is unconfirmed"
+    else:
+        try:
+            current = resolve_live_destination(
+                t.transport, t.platform, t.chat_id, t.thread_id, source.to_dict(), t.loop,
+                refresh=True,
+            )
+        except Exception as exc:
+            reason = f"destination revalidation failed: {exc}"
+        else:
+            if current is None or current.source.chat_type != source.chat_type:
+                reason = "the destination's chat type changed during delivery"
+    if reason:
+        logger.warning("Job '%s': continuation skipped for %s: %s", t.job["id"], t.where, reason)
+    return reason is None
+
+
+
 def _seed_live_delivery_sessions(t: _TargetDelivery, delivered_message_id) -> None:
     """After a confirmed live send, seed continuation session(s) and run the generic mirror.
     Thread seeding is deferred here so open-succeeds/deliver-fails never seeds an unseen brief."""
     job = t.job
     origin = t.origin
-    if t.platform_name == "matrix":
-        from cron.scheduler_delivery_destination import resolve_live_destination
-
-        source = t.resolved_source
-        if source is None or source.chat_type not in {"dm", "group"}:
-            return
-        current = resolve_live_destination(
-            t.transport, t.platform, t.chat_id, t.thread_id, source.to_dict(), t.loop,
-        )
-        if current is None or current.source.chat_type != source.chat_type:
-            return
+    seed_thread_id = t.opened_thread_id or (
+        t.thread_id if t.resolved_source is not None and t.mirror_this_target else None
+    )
+    bookkeeping = t.mirror_text.strip() and (
+        seed_thread_id or t.mirror_this_target or (t.in_channel_surface and t.inchannel_continuable))
+    if bookkeeping and t.resolved_source is not None and not _resolved_destination_unchanged(t):
+        return
     seed_kwargs = dict(
         chat_name=origin.get("chat_name"), is_dm=t.is_dm_target, scope_id=origin.get("scope_id"))
     thread_seeded = False
     inchannel_seeded = False
-    seed_thread_id = t.opened_thread_id or (
-        t.thread_id if t.resolved_source is not None and t.mirror_this_target else None
-    )
     if seed_thread_id:
         _seed_cron_thread_session(
             job, t.runtime_adapter, t.platform_name, t.chat_id, seed_thread_id, t.mirror_text,
