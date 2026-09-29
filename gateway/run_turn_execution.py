@@ -184,7 +184,6 @@ class GatewayTurnExecutionMixin:
             )
 
         except Exception as e:
-            event._processing_state.outcome = ProcessingOutcome.FAILURE
             return await self._hmwa_agent_error_reply(e, event, source, session_entry, session_key, prepared)
         finally:
             from gateway.pending_execution import consume_pending_execution
