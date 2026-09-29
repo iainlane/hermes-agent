@@ -227,6 +227,9 @@ class MatrixTurnContext:
             reply_to_author_authorized=authorized,
         )
 
+    def media_event(self, event: MessageEvent) -> MessageEvent:
+        return event.authored_media()
+
     def reply_image_paths(self) -> list[str]:
         return list(
             dict.fromkeys(

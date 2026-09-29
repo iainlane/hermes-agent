@@ -1755,22 +1755,15 @@ class GatewayInboundMixin:
                     logger.debug("Matrix thread context fetch failed: %s", exc)
 
         message_text = self._prefix_inbound_sender_context(event, source, message_text)
-        media_event = event
-        media_event_for_snapshot = getattr(context_snapshot, "media_event", None)
-        if callable(media_event_for_snapshot):
-            media_event = media_event_for_snapshot(event)
-        if context_snapshot is not None and event._quoted_media_dependencies:
-            media_event = media_event.authored_media()
+        media_event = context_snapshot.media_event(event) if context_snapshot is not None else event
         image_paths, audio_paths, audio_file_paths, video_paths = self._classify_inbound_media(media_event, _pending_stt_prepared)
-        authored_images = None
-        if image_paths:
-            if callable(media_event_for_snapshot):
-                from gateway.inbound_context import AuthoredImageEnrichment
+        authored_images = ()
+        if image_paths and context_snapshot is not None:
+            from gateway.inbound_context import ImageEnrichment
 
-                description = await self._enrich_inbound_images(source, session_key, "", image_paths)
-                authored_images = AuthoredImageEnrichment(tuple(image_paths), description)
-            else:
-                message_text = await self._enrich_inbound_images(source, session_key, message_text, image_paths)
+            authored_images = await ImageEnrichment.enrich_each(self, source, session_key, image_paths)
+        elif image_paths:
+            message_text = await self._enrich_inbound_images(source, session_key, message_text, image_paths)
         if audio_paths:
             message_text = await self._enrich_inbound_voice(event, source, message_text, audio_paths)
         message_text = self._prepend_inbound_media_file_notes(message_text, audio_file_paths, video_paths)
@@ -1824,23 +1817,15 @@ class GatewayInboundMixin:
             if context and context_snapshot is None:
                 message_text = f"{context}\n\n[New message]\n{message_text}"
         if context_snapshot is not None:
-            from gateway.inbound_context import PreparedInboundMessage, QuotedImageEnrichment
+            from gateway.inbound_context import ImageEnrichment, PreparedInboundMessage
 
             await context_snapshot.refresh()
-            prepared = PreparedInboundMessage(context_snapshot, event, message_text, context)
-            prepared.authored_images = authored_images
+            prepared = PreparedInboundMessage(
+                context_snapshot, event, message_text, context, authored_images=authored_images,
+            )
             quoted_images = context_snapshot.reply_image_paths()
             if quoted_images:
-                native_images = self._consume_pending_native_image_paths(session_key)
-                enrichments = []
-                for path in quoted_images:
-                    text = await self._enrich_inbound_images(source, session_key, "", [path])
-                    enrichments.append(QuotedImageEnrichment(path, text))
-                    native_images.extend(self._consume_pending_native_image_paths(session_key))
-                prepared.quoted_images = tuple(enrichments)
-                state = self._peek_session_state(session_key)
-                if state is not None:
-                    state.persistent.native_image_paths = list(dict.fromkeys(native_images))
+                prepared.quoted_images = await ImageEnrichment.enrich_each(self, source, session_key, quoted_images)
                 await context_snapshot.refresh()
             event._prepared_inbound = prepared
             message_text = prepared.render(self)
