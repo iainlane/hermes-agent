@@ -49,15 +49,6 @@ class _RoomIdentityResolver(Protocol):
 class MatrixDeliveryMixin:
     _reply_to_mode: str
 
-    def _should_reply_anchor(self, reply_to: str | None, chunk_index: int) -> bool:
-        if not reply_to:
-            return False
-        if self._reply_to_mode == "off":
-            return False
-        if self._reply_to_mode == "all":
-            return True
-        return chunk_index == 0
-
     _client: Any
     _user_id: str
     _joined_rooms: set[str]
