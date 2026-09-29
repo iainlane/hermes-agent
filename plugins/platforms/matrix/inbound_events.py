@@ -14,6 +14,7 @@ from plugins.platforms.matrix.effective_event import event_content, event_unsign
 from plugins.platforms.matrix.rich_content import has_media_url, native_event_context
 from plugins.platforms.matrix.voice_mention import VoiceGate
 from plugins.platforms.matrix.media_content import _inbound_media_caption, _is_bare_media_filename
+from plugins.platforms.matrix.permalinks import event_permalink, room_via_servers
 from plugins.platforms.matrix.relations import MatrixRelation
 from plugins.platforms.matrix.reply_context import MatrixEventContext, MatrixEventContextCache, MatrixReplyContext, extract_mx_reply_quote, _label_body, _has_reply_fallback, _split_reply_fallback
 
@@ -289,14 +290,14 @@ class MatrixInboundEventMixin(BasePlatformAdapter):
         if voice_gate is not None:  # decided (parked or passing): don't hold bare mentions any longer
             self._parked_voices.release(room_id, sender, voice_gate)
         display_name = await self._get_display_name(room_id, sender)
+        via = await room_via_servers(
+            getattr(self._client, "state_store", None), room_id,
+            ((self._user_id or "").partition(":")[2], identity.server_name))
         source = self.build_source(
             chat_id=room_id, chat_name=identity.display_name, chat_type=chat_type, user_id=sender,
             user_name=display_name, thread_id=thread_id, chat_topic=identity.room_topic,
             guild_id=identity.server_name, parent_chat_id=room_id if thread_id else None, message_id=event_id,
-            source_permalink=self._build_source_permalink(
-                room_id, event_id,
-                (self._user_id or "").partition(":")[2] or identity.server_name,
-            ))
+            source_permalink=event_permalink(room_id, event_id, via))
         if record:
             if thread_id:
                 await self._threads.mark_async(thread_id)  # covers real roots and synthetic ones alike
