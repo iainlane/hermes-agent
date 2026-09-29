@@ -275,6 +275,7 @@ class GatewayInboundContextMixin:
         if getattr(event, "metadata", None) and event.metadata.get("edited_message"):
             target = event.metadata.get("edited_message_original_id") or "unknown"
             message_text = f"[Correction to earlier message {target}]\n\n{message_text}"
+        # Keep the source notes outermost because strip_inbound_source_note removes them by prefix match.
         if source.platform == Platform.MATRIX and event.message_id and source.source_permalink:
             from gateway.session import _should_redact_pii
 
