@@ -428,16 +428,15 @@ async def test_pin_snapshots_expose_effective_state_after_sibling_await(state: s
     for kind in ("state", "members", "permissions", "pins")
     for change in (
         "unchanged", "closing", "client", "account", "api", "api-token", "http-session",
-        "home", "transport", "actor", "room", "policy", "chat-type",
+        "room", "policy", "chat-type",
     )
 ] + [("state", "policy-last-missing-state")])
-async def test_inspection_rechecks_owning_profile_session_and_policy_after_await(
+async def test_inspection_rechecks_owning_client_and_policy_after_await(
     tmp_path, monkeypatch, kind: str, change: str,
 ):
     from agent import secret_scope
     from gateway.run import _profile_runtime_scope
     from gateway.session_context import clear_session_vars, set_session_vars
-    from hermes_constants import set_hermes_home_override
     from tools.matrix_read_tool import _matrix_read
 
     monkeypatch.setattr(secret_scope, "_MULTIPLEX_ACTIVE", True)
@@ -522,15 +521,6 @@ async def test_inspection_rechecks_owning_profile_session_and_policy_after_await
         "api": lambda: setattr(first_client, "api", second._client.api),
         "api-token": lambda: setattr(first_client.api, "token", "changed"),
         "http-session": lambda: setattr(first_client.api, "session", object()),
-        "home": lambda: set_hermes_home_override(home_b),
-        "transport": lambda: set_session_vars(
-            platform="matrix", chat_id=room, user_id=user, profile="A",
-            session_key="matrix-A", transport_adapter=second,
-        ),
-        "actor": lambda: set_session_vars(
-            platform="matrix", chat_id=room, user_id="@different:server", profile="A",
-            session_key="matrix-A", transport_adapter=first,
-        ),
         "room": lambda: first._joined_rooms.clear(),
         "policy": lambda: setattr(first, "_allowed", False),
         "policy-last-missing-state": lambda: setattr(first, "_allowed", False),

@@ -8,8 +8,6 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 from urllib.parse import quote
 
-from gateway.session_context import get_session_env, get_session_transport
-from hermes_constants import hermes_home_key
 from plugins.platforms.matrix.read_context import (
     MatrixReadEvent, Method, _current_read_access, _read_access, _raw_event, _visible_event,
 )
@@ -173,21 +171,11 @@ class _InspectionRejected(Exception):
         super().__init__(error["error"])
 
 
-def _session_identity() -> tuple[str, ...]:
-    return tuple(str(get_session_env(key) or "") for key in (
-        "HERMES_SESSION_PLATFORM", "HERMES_SESSION_CHAT_ID", "HERMES_SESSION_USER_ID",
-        "HERMES_SESSION_PROFILE", "HERMES_SESSION_KEY", "HERMES_SESSION_ID",
-    ))
-
-
 @dataclass(frozen=True)
 class _InspectionOwner:
     adapter: Any
     client: Any
     cache: MatrixEventContextCache | None
-    home: str
-    transport: tuple[Any, Any]
-    session: tuple[str, ...]
     bot_id: str
     account_id: str
     device_id: str
@@ -205,15 +193,14 @@ class _InspectionOwner:
         api = getattr(client, "api", None)
         crypto = getattr(client, "crypto", None)
         return cls(
-            adapter, client, getattr(adapter, "_event_context_cache", None), hermes_home_key(),
-            get_session_transport(), _session_identity(), str(adapter._user_id or ""),
+            adapter, client, getattr(adapter, "_event_context_cache", None), str(adapter._user_id or ""),
             str(getattr(client, "mxid", "") or ""), str(getattr(client, "device_id", "") or ""),
             api, str(getattr(api, "base_url", "") or ""), getattr(api, "token", None),
             getattr(api, "session", None), crypto, getattr(crypto, "crypto_store", None),
             getattr(adapter, "_store_dir", None),
         )
 
-    def check(self, room_id: str, requester: str) -> None:
+    def check(self) -> None:
         if getattr(self.adapter, "_closing", False) or self.adapter._client is None:
             raise _InspectionRejected({"error": "Matrix client is disconnected"})
         current = self.capture(self.adapter)
@@ -221,23 +208,18 @@ class _InspectionOwner:
             current.client is not self.client or current.cache is not self.cache
             or current.api is not self.api or current.http_session is not self.http_session
             or current.crypto is not self.crypto or current.crypto_store is not self.crypto_store
-            or current.transport[0] is not self.transport[0] or current.transport[1] is not self.transport[1]
-            or current.home != self.home or current.session != self.session
             or current.bot_id != self.bot_id or current.account_id != self.account_id
             or current.device_id != self.device_id or current.api_url != self.api_url
             or current.api_token != self.api_token or current.store_dir != self.store_dir
-            or (self.transport[0] is not None and (
-                self.transport[0] is not self.adapter or self.session[:3] != ("matrix", room_id, requester)
-            ))
         ):
             raise _InspectionRejected({"error": "Matrix room inspection context changed"})
 
     async def access(self, room_id: str, requester: str, chat_type: str | None = None) -> str:
-        self.check(room_id, requester)
+        self.check()
         client, current_chat_type, error = await asyncio.wait_for(
             _read_access(self.adapter, room_id, requester), timeout=10.0,
         )
-        self.check(room_id, requester)
+        self.check()
         if error is None:
             assert current_chat_type is not None
             client, current_chat_type, error = _current_read_access(
