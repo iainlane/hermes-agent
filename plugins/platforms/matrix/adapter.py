@@ -1306,7 +1306,14 @@ class MatrixAdapter(MatrixApprovalMixin, MatrixReactionPromptMixin, MatrixRTCVoi
         except Exception as exc:
             return SendResult(success=False, error=f"Matrix target '{target}': {exc}")
         chat_id, metadata = destination.room_id, destination.metadata
-        reply_to = (metadata or {}).get("_stream_reply_to_message_id", reply_to)
+        meta = metadata or {}
+        # The stream consumer chains reply_to through its own chunks and omits it on
+        # interim sends; reply_to_mode applies to the request that the turn answers.
+        reply_to = (
+            meta.get("reply_to_message_id")
+            or meta.get("_stream_reply_to_message_id")
+            or reply_to
+        )
         last_event_id = None
         event_ids: list[str] = []
         formatted = self.format_message(content)
