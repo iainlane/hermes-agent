@@ -275,6 +275,7 @@ class MatrixIntakeMixin(BasePlatformAdapter):
             self._watch_purge_handle = None
         for session_key in tuple(self._reaction_followup_actions):
             self._discard_followup_action(session_key)
+        await self._close_matrix_approvals()
         await self.close_rtc_calls()
         if self._sync_task and not self._sync_task.done():
             self._sync_task.cancel()
