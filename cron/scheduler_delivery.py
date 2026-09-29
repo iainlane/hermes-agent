@@ -15,7 +15,7 @@ import shutil
 import subprocess
 import sys
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -317,18 +317,10 @@ def _origin_delivery_thread(origin: dict):
 
 def _home_target(platform_name: str, chat_id: str, resolved_from: Optional[str] = None) -> dict:
     """Target dict for a platform's configured home channel (+ optional mirror provenance)."""
-    from tools.send_message_targets import _parse_target_ref
-
-    parsed_chat_id, thread_id, is_explicit = _parse_target_ref(platform_name.lower(), chat_id)
-    if is_explicit and parsed_chat_id:
-        chat_id = parsed_chat_id
-    if thread_id is None:
-        thread_id = _get_home_target_thread_id(platform_name)
-
     target = {
         "platform": platform_name,
         "chat_id": chat_id,
-        "thread_id": thread_id}
+        "thread_id": _get_home_target_thread_id(platform_name)}
     if resolved_from:
         target["_resolved_from"] = resolved_from
     return target
@@ -1200,7 +1192,7 @@ def _live_route_metadata(t: _TargetDelivery) -> tuple[Optional[str], dict, dict]
     if t.origin_target and t.origin.get("scope_id"):
         route_metadata.setdefault("scope_id", str(t.origin["scope_id"]))
         media_metadata.setdefault("scope_id", str(t.origin["scope_id"]))
-    if t.original_chat_id and t.original_chat_id != t.chat_id:
+    if t.resolved_source is not None:
         route_metadata["_original_target"] = t.original_chat_id
         media_metadata["_original_target"] = t.original_chat_id
     return route_thread_id, route_metadata, media_metadata
@@ -1312,8 +1304,9 @@ def _live_send_text(
 
 
 def _live_send_media(
-    t: _TargetDelivery, media_metadata: dict, media_files: list, delivery_errors: list) -> bool:
-    """Send extracted media as native attachments with the same routing as the text send."""
+    t: _TargetDelivery, media_metadata: dict, media_files: list, media_errors: list) -> list:
+    """Send extracted media as native attachments with the same routing as the text send. Each
+    file is sent on its own so the attachments that failed are known; they are returned."""
     routed_media_metadata = dict(media_metadata or {})
     if t.is_relay:
         routed_media_metadata["_relay_logical_platform"] = t.platform.value
@@ -1323,26 +1316,39 @@ def _live_send_media(
                 routed_media_metadata["user_id"] = logical_home.user_id
             if logical_home.scope_id:
                 routed_media_metadata["scope_id"] = logical_home.scope_id
-    _media_errors = _send_media_via_adapter(
-        t.runtime_adapter, t.chat_id, media_files, routed_media_metadata or None, t.loop, t.job,
-        platform=t.platform,
-    )
-    # Surface per-file failures into run status: text delivered but attachment lost is not ok.
-    for _me in _media_errors:
-        delivery_errors.append(f"{_me} (target {t.where})")
-    return not _media_errors
+    undelivered = []
+    for media in media_files:
+        errors = _send_media_via_adapter(
+            t.runtime_adapter, t.chat_id, [media], routed_media_metadata or None, t.loop, t.job,
+            platform=t.platform,
+        )
+        if errors:
+            undelivered.append(media)
+        media_errors.extend(f"{error} (target {t.where})" for error in errors)
+    return undelivered
+
+
+@dataclass
+class _LiveDelivery:
+    """Outcome of the live lane for one target. ``unsent_media`` lists the attachments of a
+    media-only output that the adapter did not accept; the standalone lane sends only those."""
+
+    delivered: bool
+    unsent_media: list = field(default_factory=list)
+
 
 
 def _deliver_via_live_adapter(
     t: _TargetDelivery, cleaned_text: str, media_files: list, *, target_errors: list,
     delivery_errors: list, unverified_targets: list,
-) -> bool:
-    """Deliver one target via the live gateway adapter; True once delivered. ``target_errors`` =
+) -> _LiveDelivery:
+    """Deliver one target via the live gateway adapter. ``target_errors`` =
     this lane's soft failures (surfaced only if standalone also fails); ``delivery_errors`` =
     partial failures (media, thread fallback) that surface even on success."""
     job = t.job
     route_thread_id, route_metadata, media_metadata = _live_route_metadata(t)
     delivered = False
+    unsent_media: list = []
     try:
         # Send cleaned text (MEDIA tags stripped) through the gateway's DeliveryRouter so it gets
         # the same platform routing as live messages (Telegram's three-mode topic routing).
@@ -1370,9 +1376,13 @@ def _deliver_via_live_adapter(
         # payload is already assumed delivered (#38922). Record the skipped attachments so the drop is
         # visible rather than silently lost.
         if adapter_ok and not timed_out and media_files:
-            media_ok = _live_send_media(t, media_metadata, media_files, delivery_errors)
+            # Without text, the standalone lane retries the attachments that failed here, so
+            # their errors count only if that retry fails too.
+            failed_media = _live_send_media(
+                t, media_metadata, media_files, delivery_errors if text_to_send else target_errors)
             if not text_to_send:
-                adapter_ok = media_ok
+                unsent_media = failed_media
+                adapter_ok = len(failed_media) < len(media_files)
         elif timed_out and media_files:
             _note_target_error(
                 job,
@@ -1398,7 +1408,7 @@ def _deliver_via_live_adapter(
         if not any(err_msg in err for err in target_errors):
             target_errors.append(err_msg)
         _warn_live_lane_failure(job, err_msg, t.is_relay)
-    return delivered
+    return _LiveDelivery(delivered, unsent_media)
 
 
 def _standalone_send(
@@ -1526,11 +1536,10 @@ def _deliver_standalone(
         msg = f"delivery warning: {_w} (target {t.where})"
         logger.error("Job '%s': %s", job["id"], msg)
         delivery_errors.append(msg)
-    if t.platform_name == "matrix":
-        if not isinstance(result, dict) or result.get("success") is not True:
-            return
-        t.chat_id = result.get("chat_id", t.chat_id)
-        t.thread_id = result.get("thread_id", t.thread_id)
+    from gateway.delivery import SentDestination
+    sent = SentDestination.from_result(result, t.chat_id, t.thread_id)
+    if sent.chat_type is not None:
+        t.chat_id, t.thread_id = sent.chat_id, sent.thread_id
         t.origin_target = (
             _continuation._target_matches_origin(t.origin, t.platform_name, t.chat_id, t.thread_id)
             or _continuation._target_matches_origin(t.origin, t.platform_name, t.original_chat_id or t.chat_id, t.thread_id)
@@ -1543,8 +1552,7 @@ def _deliver_standalone(
     _continuation._maybe_mirror_cron_delivery(
         job, t.platform_name, t.chat_id, t.mirror_text, thread_id=t.thread_id,
         user_id=t.origin_user_id,
-        enabled=t.mirror_this_target,
-        chat_type=result.get("chat_type") if isinstance(result, dict) else None)
+        enabled=t.mirror_this_target, chat_type=sent.chat_type)
 
 
 def _prepare_target_delivery(
@@ -1657,10 +1665,7 @@ def _prepare_target_delivery(
     opened_thread_id: Optional[str] = None
     if (
         mirror_this_target
-        and (
-            platform_name != "matrix"
-            or resolved_source is not None and resolved_source.chat_type in {"dm", "group"}
-        )
+        and (resolved_source is None or resolved_source.chat_type != "unknown")
         and not in_channel_surface
         and live_adapter_ready
         and not thread_id  # never override an explicit origin thread/topic
@@ -1838,14 +1843,16 @@ def _deliver_result(
         if t is None:
             continue
         target_errors: list = [t.resolution_error] if t.resolution_error else []
-        delivered = t.live_adapter_ready and _deliver_via_live_adapter(
+        live = _deliver_via_live_adapter(
             t, cleaned_delivery_content, media_files,
             target_errors=target_errors, delivery_errors=delivery_errors,
             unverified_targets=unverified_targets,
-        )
-        if not delivered:
+        ) if t.live_adapter_ready else _LiveDelivery(delivered=False)
+        if not live.delivered:
             _deliver_standalone(
                 t, cleaned_delivery_content, media_files, target_errors, delivery_errors)
+        elif live.unsent_media:
+            _deliver_standalone(t, "", live.unsent_media, target_errors, delivery_errors)
 
     # Filter-time drops apply to every target; report them once. A run whose every target was
     # suppressed sent nothing, so there is no drop to report.
