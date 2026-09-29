@@ -416,7 +416,7 @@ async def test_configured_thread_suffix_reaches_the_room_thread(
         return_value={adapter._user_id, "@alice:remote.test", "@bob:remote.test"}
     )
     adapter._get_room_member_profiles = AsyncMock(return_value=None)
-    adapter._get_room_state_value = AsyncMock(return_value=None)
+    adapter._read_room_state_event = AsyncMock(return_value=None)
 
     source = await adapter.resolve_delivery_target(SessionSource(
         platform=Platform.MATRIX, chat_id=target, thread_id=thread_id,
