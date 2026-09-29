@@ -140,3 +140,8 @@ def _pre_sanitize_matrix_markdown(text: str) -> str:
     return re.sub(
         r"""(?is)\s+(href|src)\s*=\s*("[^"]*(?:javascript|data|vbscript):[^"]*"|'[^']*(?:javascript|data|vbscript):[^']*'|[^\s>]*(?:javascript|data|vbscript):[^\s>]*)""",
         "", result)
+
+
+def _prepare_matrix_markdown(text: str) -> tuple[str, list[tuple[str, str]]]:
+    """Sanitise raw HTML and replace LaTeX with tokens before Markdown conversion."""
+    return _latex_to_tokens(_pre_sanitize_matrix_markdown(text))
