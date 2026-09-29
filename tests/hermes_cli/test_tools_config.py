@@ -183,11 +183,12 @@ def test_discord_toolsets_do_not_leak_to_other_platforms():
     assert "discord_admin" not in enabled
 
 
-_MATRIX_TOOLSETS = ["matrix_read", "matrix_reaction", "matrix_followup", "matrix_image_packs"]
+_MATRIX_TOOLSETS = ["matrix_read", "matrix_reaction", "matrix_followup", "matrix_image_packs", "matrix_threads"]
 
 
 def _matrix_toolset_enabled(config: dict, toolset: str) -> bool:
-    return any(toolset in resolve_toolset(ts) for ts in _get_platform_tools(config, "matrix"))
+    enabled_tools = {tool for ts in _get_platform_tools(config, "matrix") for tool in resolve_toolset(ts)}
+    return set(resolve_toolset(toolset)) <= enabled_tools
 
 
 @pytest.mark.parametrize("toolset", _MATRIX_TOOLSETS)
