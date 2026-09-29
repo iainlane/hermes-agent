@@ -200,12 +200,14 @@ def pytest_runtest_makereport(
     call: pytest.CallInfo[None],
 ) -> Generator[None, pytest.TestReport, pytest.TestReport]:
     report = yield
-    gateway = getattr(item, "funcargs", {}).get("gateway")
-    if report.when == "call" and report.failed and isinstance(gateway, LiveGateway):
-        report.sections.append(("gateway.log", gateway.log_tail()))
-        trace = gateway.home / "discovery-trace.jsonl"
-        if trace.exists():
-            report.sections.append(("discovery trace", trace.read_text(encoding="utf-8")))
+    if report.when != "call" or not report.failed:
+        return report
+    for value in getattr(item, "funcargs", {}).values():
+        if isinstance(value, LiveGateway):
+            report.sections.append(("gateway.log", value.log_tail()))
+            trace = value.home / "discovery-trace.jsonl"
+            if trace.exists():
+                report.sections.append(("discovery trace", trace.read_text(encoding="utf-8")))
     return report
 
 
