@@ -351,8 +351,15 @@ def synapse_message_burst() -> bool:
     return True
 
 
+@pytest.fixture
+def matrix_synapse_overrides() -> dict:
+    return {}
+
+
 @contextmanager
-def _synapse_server(*, extra_config: str = "", message_burst: bool = False) -> Iterator[tuple[DockerContainer, str, Network]]:
+def _synapse_server(
+    *, extra_config: str = "", message_burst: bool = False, overrides: dict | None = None,
+) -> Iterator[tuple[DockerContainer, str, Network]]:
     # Start Ryuk before creating the volume so a killed worker cannot leave it behind.
     Reaper.get_instance()
     client = docker.from_env()
@@ -374,17 +381,22 @@ def _synapse_server(*, extra_config: str = "", message_burst: bool = False) -> I
 
         with DockerContainer(
             SYNAPSE_IMAGE,
-            entrypoint="/bin/sh",
+            entrypoint="python",
         ).with_command([
             "-c",
-            'printf \'%s\' "$1" >> /data/homeserver.yaml',
-            "matrix-test-config",
-            "\nenable_registration: true\nenable_registration_without_verification: true\n"
-            + ("rc_message:\n  per_second: 100\n  burst_count: 100\n" if message_burst else "")
-            + extra_config,
+            "import json,sys,yaml; from pathlib import Path; "
+            "p=Path('/data/homeserver.yaml'); c=yaml.safe_load(p.read_text()); "
+            "c.update(enable_registration=True,enable_registration_without_verification=True); "
+            "c.update(rc_message={'per_second':100,'burst_count':100}) if json.loads(sys.argv[3]) else None; "
+            "c.update(json.loads(sys.argv[1])); c.update(yaml.safe_load(sys.argv[2]) or {}); p.write_text(yaml.safe_dump(c))",
+            json.dumps(overrides or {}),
+            extra_config,
+            json.dumps(message_burst),
         ]).with_volume_mapping(volume.name, "/data", "rw") as configure:
             exit_state = configure.get_wrapped_container().wait(timeout=30)
-            assert exit_state["StatusCode"] == 0, configure.get_wrapped_container().logs().decode(errors="replace")
+            assert exit_state["StatusCode"] == 0, (
+                configure.get_wrapped_container().logs().decode(errors="replace")
+            )
 
         with Network() as network:
             with (
@@ -413,8 +425,8 @@ def _synapse_server(*, extra_config: str = "", message_burst: bool = False) -> I
 
 
 @pytest.fixture
-def synapse(docker_engine: None, synapse_message_burst: bool) -> Iterator[tuple[DockerContainer, str, Network]]:
-    with _synapse_server(message_burst=synapse_message_burst) as server:
+def synapse(docker_engine: None, synapse_message_burst: bool, matrix_synapse_overrides: dict) -> Iterator[tuple[DockerContainer, str, Network]]:
+    with _synapse_server(message_burst=synapse_message_burst, overrides=matrix_synapse_overrides) as server:
         yield server
 
 
