@@ -93,6 +93,7 @@ CONFIGURABLE_TOOLSETS = [
     ("discord",         "💬 Discord (read/participate)", "fetch messages, search members, create thread"),
     ("discord_admin",   "🛡️  Discord Server Admin",    "list channels/roles, pin, assign roles"),
     ("matrix_followup", "🔁 Matrix Reaction Follow-ups", "let a reaction to a reply start a follow-up"),
+    ("matrix_polls",    "📊 Matrix Polls",             "create, vote in, read and close native polls"),
     ("matrix_read",     "📜 Matrix History",           "read room, thread and event history"),
     ("matrix_reaction", "👍 Matrix Reactions",         "add and remove the agent's reactions"),
     ("matrix_admin",    "🛡️  Matrix Room Admin",        "create rooms, invite, leave, forget, redact, and pin messages"),
