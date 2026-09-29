@@ -37,7 +37,7 @@ _register = partial(_register_account, unique=True)
 
 @pytest.fixture(scope="module")
 def synapse(docker_engine: None) -> Iterator[tuple[DockerContainer, str, Network]]:
-    with _synapse_server(extra_config=(
+    with _synapse_server(message_burst=True, extra_config=(
         "rc_registration:\n  per_second: 100\n  burst_count: 100\n"
         "rc_login:\n  address:\n    per_second: 100\n    burst_count: 100\n"
     )) as server:
