@@ -39,6 +39,7 @@ async def test_queued_tool_context_restores_outer_identity_and_profile(
     runner.config = GatewayConfig(multiplex_profiles=True)
     runner.adapters = {}
     runner._draining = False
+    runner._gateway_loop = asyncio.get_running_loop()
     runner._profile_adapters = {}
 
     def profile_home(source: SessionSource) -> Path:
@@ -175,6 +176,7 @@ async def test_queued_tool_context_restores_outer_identity_and_profile(
         session_id="sid",
         message_id=source.message_id,
         transport_adapter=adapters["a"],
+        transport_loop=asyncio.get_running_loop(),
     )
     cwd_token = set_session_cwd("/outer/workspace")
     try:
