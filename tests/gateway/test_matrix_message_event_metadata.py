@@ -204,7 +204,10 @@ _REPLY_WITHOUT_QUOTE = {
         pytest.param(
             False,
             {"body": "> <@carol:example.org> said it failed\nI disagree"},
-            {**_REPLY_WITHOUT_QUOTE, "text": "> <@carol:example.org> said it failed\nI disagree"},
+            {
+                **_REPLY_WITHOUT_QUOTE,
+                "text": "> <@carol:example.org> said it failed\nI disagree",
+            },
             id="own-quote-with-pill-and-no-blank-line",
         ),
         pytest.param(
@@ -235,7 +238,11 @@ _REPLY_WITHOUT_QUOTE = {
                     "m.in_reply_to": {"event_id": "$target1"},
                 },
             },
-            {**_REPLY_WITHOUT_QUOTE, "text": "> the logs say timeout\n\nwhy?", "reply_to_message_id": None},
+            {
+                **_REPLY_WITHOUT_QUOTE,
+                "text": "> the logs say timeout\n\nwhy?",
+                "reply_to_message_id": None,
+            },
             id="thread-message-own-quote",
         ),
         pytest.param(
@@ -248,8 +255,40 @@ _REPLY_WITHOUT_QUOTE = {
                     "because reasons"
                 ),
             },
-            {**_REPLY_WITHOUT_QUOTE, "text": "because reasons", "reply_to_text": "original question"},
+            {
+                **_REPLY_WITHOUT_QUOTE,
+                "text": "because reasons",
+                "reply_to_text": "original question",
+            },
             id="html-fallback",
+        ),
+        pytest.param(
+            False,
+            {
+                "body": "> original question\n\nbecause reasons",
+                "format": "org.matrix.custom.html",
+                "formatted_body": (
+                    '<mx-reply data-x="1"><blockquote>original question</blockquote></mx-reply>'
+                    "because reasons"
+                ),
+            },
+            {
+                **_REPLY_WITHOUT_QUOTE,
+                "text": "because reasons",
+                "reply_to_text": "original question",
+            },
+            id="html-fallback-with-attributes",
+        ),
+        pytest.param(
+            False,
+            {
+                "body": "> original question\n\nbecause reasons",
+                "formatted_body": (
+                    "<mx-reply><blockquote>original question</blockquote></mx-reply>because reasons"
+                ),
+            },
+            {**_REPLY_WITHOUT_QUOTE, "text": "> original question\n\nbecause reasons"},
+            id="mx-reply-without-html-format",
         ),
         pytest.param(
             False,
@@ -265,7 +304,9 @@ _REPLY_WITHOUT_QUOTE = {
         ),
     ],
 )
-async def test_reply_strips_only_a_reply_fallback(monkeypatch, require_mention, content, expected):
+async def test_reply_strips_only_a_reply_fallback(
+    monkeypatch, require_mention, content, expected
+):
     """Matrix 1.13 (MSC2781) removed reply fallbacks, so a leading quote in a reply can be
     the user's own text. It must reach the agent, with a bot mention stripped like any text."""
     adapter = _make_adapter(require_mention=require_mention, monkeypatch=monkeypatch)
