@@ -7,7 +7,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
-from plugins.platforms.matrix.read_context import _read_access, _raw_event, _visible_event
+from plugins.platforms.matrix.client_events import raw_event
+from plugins.platforms.matrix.read_context import _read_access, _visible_event
 
 
 def _content(value: Any) -> dict[str, Any]:
@@ -118,7 +119,7 @@ async def _pinned_event(
     adapter: Any, client: Any, room_id: str, chat_type: str, event_id: str,
 ) -> tuple[dict | None, dict | None]:
     try:
-        raw = _raw_event(await asyncio.wait_for(client.get_event(room_id, event_id), timeout=10.0))
+        raw = raw_event(await asyncio.wait_for(client.get_event(room_id, event_id), timeout=10.0))
     except Exception as exc:
         return None, {"event_id": event_id, "error": f"Matrix event read failed: {type(exc).__name__}"}
     if raw.get("event_id") != event_id:
