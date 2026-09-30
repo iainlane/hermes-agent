@@ -14,6 +14,7 @@ from gateway.config import GatewayConfig, Platform, PlatformConfig
 from gateway.platforms.event import MessageType
 from gateway.run import GatewayRunner
 from gateway.session import SessionStore
+from gateway.session_state import SessionState
 from gateway.run_turn_runner import TurnRunner
 from gateway.turn_context import TurnContext
 from plugins.platforms.matrix.adapter import MatrixAdapter
@@ -490,3 +491,38 @@ async def test_edited_emote_rewrites_its_own_text_not_an_identical_quote(
         f'[Replying to Alice: "[emote by {SENDER}] waves"]\n\n'
         f"[emote by {SENDER}] waves again"
     )
+
+
+@pytest.mark.asyncio
+async def test_oversized_media_reaches_a_live_session_as_its_marker(monkeypatch, tmp_path):
+    adapter, received = _adapter(monkeypatch)
+    adapter._max_media_bytes = 10
+    await adapter._on_room_message({
+        "type": "m.room.message",
+        "room_id": ROOM,
+        "sender": SENDER,
+        "event_id": "$file",
+        "origin_server_ts": 1000000,
+        "content": {
+            "msgtype": "m.file",
+            "body": "Please review this file",
+            "filename": "oversized.txt",
+            "url": "mxc://example.org/oversized",
+            "info": {"mimetype": "text/plain", "size": 11},
+        },
+    })
+    event = received.await_args.args[0]
+    runner = object.__new__(GatewayRunner)
+    runner.config = GatewayConfig()
+    runner.session_store = SessionStore(tmp_path / "sessions", runner.config)
+    runner._sessions = {"session": SessionState()}
+    runner.adapters = {Platform.MATRIX: adapter}
+
+    prepared = await runner._prepare_inbound_message_text(
+        event=event, source=event.source, history=[{}], session_key="session",
+    )
+
+    assert (prepared, runner._sessions["session"].persistent.native_image_paths) == (
+        "Please review this file\n[matrix file attachment too large: oversized.txt]", [],
+    )
+    adapter._client.download_media.assert_not_awaited()

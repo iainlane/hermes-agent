@@ -4567,7 +4567,7 @@ class TestMatrixImageOnlyMediaNormalization:
 
         (event,) = [call.args[0] for call in self.adapter.handle_message.await_args_list]
         assert (event.text, event.message_type, event.media_urls, event.media_types) == (
-            expected_text, MessageType.TEXT, None, None,
+            expected_text, MessageType.TEXT, [], [],
         )
         self.adapter._client.download_media.assert_not_called()
 
