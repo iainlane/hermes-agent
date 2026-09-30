@@ -7,24 +7,18 @@ import json
 import logging
 from collections import OrderedDict
 from dataclasses import dataclass, field, replace
-from enum import Enum
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 from urllib.parse import quote
 from weakref import WeakSet
 
+from plugins.platforms.matrix.client_events import Method
 from plugins.platforms.matrix.effective_event import _replacement, effective_event
 from plugins.platforms.matrix.reaction_context import MatrixReaction
 
 
 logger = logging.getLogger(__name__)
-
-try:
-    from mautrix.api import Method
-except ImportError:
-    class Method(str, Enum):
-        GET = "GET"
 
 
 @dataclass(frozen=True)
@@ -37,7 +31,7 @@ class MatrixEventContext:
     redacted: bool = False
     reactions: tuple[MatrixReaction, ...] = ()
     reactions_truncated: bool = False
-    reaction_keys_missing: bool = False
+    reactions_undecryptable: bool = False
     reactions_unavailable: bool = False
     state_error: str | None = None
     event_id: str | None = None
@@ -174,6 +168,20 @@ class MatrixEventContextCache:
             None,
         )
 
+    def hold(self, room_id: str, event_id: str) -> MatrixEventContext:
+        """Track an event for the caller without adding it to the bounded table.
+
+        The caller's reference keeps the event's state alive, so an edit or
+        redaction stored while the caller waits updates that state.
+        """
+        entry = self.history_entry(room_id, event_id)
+        if entry is not None:
+            return entry
+        state = _MatrixEventState(room_id, event_id, MatrixEventContext("", "", event_id=event_id))
+        state.current = replace(state.current, _state=state)
+        self._active_states.add(state)
+        return state.current
+
     def retain(self, room_id: str, event_id: str) -> MatrixEventContext:
         entry = self.history_entry(room_id, event_id)
         if entry is None:
@@ -294,7 +302,7 @@ class MatrixEventContextCache:
         if current is not None:
             entry = replace(
                 current, reactions=entry.reactions, reactions_truncated=entry.reactions_truncated,
-                reaction_keys_missing=entry.reaction_keys_missing, reactions_unavailable=entry.reactions_unavailable,
+                reactions_undecryptable=entry.reactions_undecryptable, reactions_unavailable=entry.reactions_unavailable,
                 _reaction_states=entry._reaction_states,
             )
         return self._check_dependencies(room_id, entry)
@@ -324,10 +332,13 @@ class MatrixEventContextCache:
         prior = self.history_entry(room_id, target)
         if prior is not None and prior.redacted:
             return
-        if prior is not None and not prior.sender:
+        # Without the original's sender, the editor cannot be checked. The edit's text is
+        # not stored; the next resolve fetches the event, and the server bundles only
+        # same-sender replacements.
+        if prior is None or not prior.sender:
             self.invalidate(room_id, target)
             return
-        if prior is not None and prior.sender != sender:
+        if prior.sender != sender:
             return
         text = _own_text(body.strip())
         if replacement.get("msgtype") in {"m.emote", "m.sticker"}:
