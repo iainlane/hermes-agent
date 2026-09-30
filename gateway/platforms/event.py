@@ -8,7 +8,7 @@ import re
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 from gateway.session import SessionSource
 
@@ -149,7 +149,13 @@ class MessageEvent:
         default=(), kw_only=True, repr=False, compare=False,
     )
 
-    def absorb_reply_expected(self, other: MessageEvent) -> None:
+    # Process-local: the events merged into this one, in arrival order, each paired with the
+    # function that merged it (None for the first). Empty until something is merged in.
+    # ``withdraw_pending_message`` replays the list without a withdrawn message.
+    _merged_parts: list[tuple["MessageEvent", Optional[Callable[["MessageEvent", "MessageEvent"], None]]]] = field(
+        default_factory=list, init=False, repr=False, compare=False)
+
+    def absorb_reply_expected(self, other: "MessageEvent") -> None:
         """One turn now answers *other* too: an addressed message wins, then an unknown one."""
         if self.reply_expected is not True and other.reply_expected is not False:
             self.reply_expected = other.reply_expected
