@@ -13,6 +13,7 @@ import pytest
 from gateway.config import GatewayConfig, Platform, PlatformConfig
 from gateway.platforms.event import MessageType
 from gateway.run import GatewayRunner
+from gateway.session import SessionStore
 from gateway.run_turn_runner import TurnRunner
 from gateway.turn_context import TurnContext
 from plugins.platforms.matrix.adapter import MatrixAdapter
@@ -51,6 +52,7 @@ def _adapter(monkeypatch: pytest.MonkeyPatch) -> tuple[MatrixAdapter, AsyncMock]
             room_topic=None,
             server_name="example.org",
             members_digest=None,
+            room_state=None,
         )
     )
     adapter._get_display_name = AsyncMock(return_value="Alice")
@@ -134,7 +136,7 @@ def _body(kind: str) -> str:
 )
 @pytest.mark.parametrize("typed", [False, True])
 async def test_native_content_reaches_model_with_actor_description_and_pixels(
-    monkeypatch, kind, scenario, typed
+    monkeypatch, tmp_path, kind, scenario, typed
 ):
     adapter, received = _adapter(monkeypatch)
     raw = _event(kind)
@@ -235,6 +237,7 @@ async def test_native_content_reaches_model_with_actor_description_and_pixels(
     }
     runner = object.__new__(GatewayRunner)
     runner.config = GatewayConfig()
+    runner.session_store = SessionStore(tmp_path / "sessions", runner.config)
     runner.adapters = {Platform.MATRIX: adapter}
     monkeypatch.setattr(runner, "_decide_image_input_mode", lambda **_kwargs: "native")
     if scenario.startswith("analysis"):
@@ -387,12 +390,13 @@ async def test_native_content_has_consistent_effective_reads_history_and_reply_p
         assert read == {
             "events": [],
             "errors": [{"event_id": "$native", "error": "missing decryption keys"}],
+            "skipped": 0,
         }
         parsed = await history_entry(
-            adapter._client, raw, adapter._event_context_cache, ROOM
+            adapter._client, raw, adapter._event_context_cache, ROOM, before=None
         )
         assert parsed is not None
-        assert parsed[0].text == "[encrypted message could not be decrypted]"
+        assert (parsed[0].sender, parsed[0].state_error) == (SENDER, "missing decryption keys")
         return
     assert read == {
         "events": [
@@ -407,9 +411,10 @@ async def test_native_content_has_consistent_effective_reads_history_and_reply_p
             }
         ],
         "errors": [],
+        "skipped": 0,
     }
     parsed = await history_entry(
-        adapter._client, raw, adapter._event_context_cache, ROOM
+        adapter._client, raw, adapter._event_context_cache, ROOM, before=None
     )
     assert parsed is not None and parsed[0].text == body
     parent = await adapter._event_context_cache.resolve(
@@ -426,12 +431,12 @@ async def test_native_content_has_consistent_effective_reads_history_and_reply_p
         {"m.in_reply_to": {"event_id": "$native"}},
     )
     assert reply is not None
-    snapshot = await adapter.fetch_inbound_context(reply, include_thread_history=False)
+    snapshot = await adapter.fetch_inbound_context(reply)
     if scenario == "withdrawn":
         await adapter._on_redaction(SimpleNamespace(room_id=ROOM, redacts="$native"))
     await snapshot.refresh()
     assert snapshot.reply_event(reply).reply_to_text == (
-        None if scenario == "withdrawn" else body
+        "[redacted]" if scenario == "withdrawn" else body
     )
     assert bool(snapshot.reply_image_paths()) is (
         kind == "sticker" and scenario not in {"withdrawn", "oversize"}

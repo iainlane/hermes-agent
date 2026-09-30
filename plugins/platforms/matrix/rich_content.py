@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Any, Awaitable, Callable
 
-from gateway.platforms.event import MessageEvent
+from gateway.platforms.event import MessageEvent, TurnContextUpdate
 from plugins.platforms.matrix.reply_context import (
     MatrixEventContext,
     MatrixEventContextCache,
@@ -45,9 +45,7 @@ class MatrixRichContentSnapshot:
     original_media_identity: str
 
     @classmethod
-    async def prepare(
-        cls, adapter: Any, event: MessageEvent, *, include_thread_history: bool
-    ) -> MatrixRichContentSnapshot:
+    def capture(cls, adapter: Any, event: MessageEvent) -> MatrixRichContentSnapshot:
         previous = next(
             (
                 snapshot
@@ -56,9 +54,7 @@ class MatrixRichContentSnapshot:
             ),
             None,
         )
-        context = await MatrixTurnContext.prepare(
-            adapter, event, include_thread_history=include_thread_history
-        )
+        context = MatrixTurnContext.capture(adapter, event)
         authored = (
             previous.authored
             if previous is not None
@@ -75,6 +71,9 @@ class MatrixRichContentSnapshot:
             if previous is not None
             else authored.attachment_identity,
         )
+
+    def use_turn_context(self, update: TurnContextUpdate | None) -> None:
+        self.context.use_turn_context(update)
 
     async def refresh(self) -> None:
         await self.context.refresh()
@@ -100,7 +99,7 @@ class MatrixRichContentSnapshot:
             return replace(authored, media_urls=[], media_types=[])
         return authored
 
-    def prepend_history(self, text: str) -> str:
+    def prepend_turn_context(self, text: str) -> str:
         current = self._current()
         if current.redacted or current.state_error:
             updated = (
@@ -110,7 +109,7 @@ class MatrixRichContentSnapshot:
             updated = current.text
         if self.original_text and updated != self.original_text:
             text = text.replace(self.original_text, updated, 1)
-        return self.context.prepend_history(text)
+        return self.context.prepend_turn_context(text)
 
     def reply_event(self, event: MessageEvent) -> MessageEvent:
         return self.context.reply_event(event)
