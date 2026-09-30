@@ -441,3 +441,52 @@ async def test_native_content_has_consistent_effective_reads_history_and_reply_p
     assert bool(snapshot.reply_image_paths()) is (
         kind == "sticker" and scenario not in {"withdrawn", "oversize"}
     )
+
+
+@pytest.mark.asyncio
+async def test_edited_emote_rewrites_its_own_text_not_an_identical_quote(
+    monkeypatch, tmp_path
+):
+    adapter, received = _adapter(monkeypatch)
+    emote = {
+        "type": "m.room.message",
+        "room_id": ROOM,
+        "sender": SENDER,
+        "origin_server_ts": 1000000,
+    }
+    await adapter._on_room_message(
+        {**emote, "event_id": "$first", "content": {"msgtype": "m.emote", "body": "waves"}}
+    )
+    await adapter._on_room_message({
+        **emote,
+        "event_id": "$native",
+        "content": {
+            "msgtype": "m.emote",
+            "body": "waves",
+            "m.relates_to": {"m.in_reply_to": {"event_id": "$first"}},
+        },
+    })
+    event = received.await_args_list[-1].args[0]
+    await adapter._on_room_message({
+        **emote,
+        "event_id": "$edit",
+        "content": {
+            "msgtype": "m.emote",
+            "body": "* waves again",
+            "m.new_content": {"msgtype": "m.emote", "body": "waves again"},
+            "m.relates_to": {"rel_type": "m.replace", "event_id": "$native"},
+        },
+    })
+    runner = object.__new__(GatewayRunner)
+    runner.config = GatewayConfig()
+    runner.session_store = SessionStore(tmp_path / "sessions", runner.config)
+    runner.adapters = {Platform.MATRIX: adapter}
+
+    prepared = await runner._prepare_inbound_message_text(
+        event=event, source=event.source, history=[{}], session_key="session",
+    )
+
+    assert prepared == (
+        f'[Replying to Alice: "[emote by {SENDER}] waves"]\n\n'
+        f"[emote by {SENDER}] waves again"
+    )

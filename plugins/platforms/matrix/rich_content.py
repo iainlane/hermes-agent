@@ -108,7 +108,9 @@ class MatrixRichContentSnapshot:
         else:
             updated = current.text
         if self.original_text and updated != self.original_text:
-            text = text.replace(self.original_text, updated, 1)
+            head, found, tail = text.rpartition(self.original_text)
+            if found:
+                text = f"{head}{updated}{tail}"
         return self.context.prepend_turn_context(text)
 
     def reply_event(self, event: MessageEvent) -> MessageEvent:
