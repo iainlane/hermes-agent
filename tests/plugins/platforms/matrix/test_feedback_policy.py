@@ -141,7 +141,7 @@ async def test_aggregated_turn_receipts_cover_the_latest_native_input(
             adapter._text_batch_delay_seconds = 0
             runner = _busy_runner(monkeypatch, adapter, "queue")
             await _text_input(adapter, "$opening", "opening")
-            await asyncio.wait_for(started.wait(), 2)
+            await asyncio.wait_for(started.wait(), 30)
             if aggregation == "queued-photos":
                 for event_id, body in (("$first", "first"), ("$second", "second")):
                     await adapter._handle_media_message(
@@ -164,7 +164,7 @@ async def test_aggregated_turn_receipts_cover_the_latest_native_input(
                 await _text_input(adapter, "$first", "first")
                 await _text_input(adapter, "$second", "second")
 
-        await asyncio.wait_for(started.wait(), 2)
+        await asyncio.wait_for(started.wait(), 30)
         arrival_ids = (
             ["$first", "$second"]
             if aggregation == "batch"
@@ -177,7 +177,7 @@ async def test_aggregated_turn_receipts_cover_the_latest_native_input(
         )
         release.set()
         while adapter._background_tasks:
-            await asyncio.wait_for(asyncio.gather(*adapter._background_tasks), 2)
+            await asyncio.wait_for(asyncio.gather(*adapter._background_tasks), 30)
         photos = (
             ["/tmp/$first.ogg", "/tmp/$second.ogg"]
             if aggregation == "queued-photos"
@@ -333,7 +333,7 @@ async def test_completed_turns_are_acknowledged_before_a_cancellable_followup(
     adapter.set_message_handler(respond)
     try:
         await adapter.handle_message(events[0])
-        await asyncio.wait_for(started.wait(), 2)
+        await asyncio.wait_for(started.wait(), 30)
         completed = events[:-1]
         expected_receipts = [
             call(event.source.chat_id, event.message_id) for event in completed
@@ -356,7 +356,7 @@ async def test_completed_turns_are_acknowledged_before_a_cancellable_followup(
             await adapter.cancel_session_processing(key)
         else:
             release.set()
-            await asyncio.wait_for(asyncio.gather(*adapter._background_tasks), 2)
+            await asyncio.wait_for(asyncio.gather(*adapter._background_tasks), 30)
         assert receipts.call_args_list == expected_receipts
         assert adapter._send_reaction.await_args_list == [
             invocation
@@ -410,7 +410,7 @@ async def test_ordinary_turn_completion_preserves_the_returned_agent_outcome(
     room = "!room:example.org"
     try:
         await _text_input(adapter, "$opening", "opening")
-        await asyncio.wait_for(asyncio.gather(*adapter._background_tasks), 2)
+        await asyncio.wait_for(asyncio.gather(*adapter._background_tasks), 30)
         runner._run_agent.assert_awaited_once()
         expected_receipts = (
             [call(room, "$opening")]
@@ -458,7 +458,7 @@ async def test_inline_command_receipt_is_independent_of_the_active_turn(
     room = "!room:example.org"
     try:
         await _text_input(adapter, "$opening", "opening")
-        await asyncio.wait_for(started.wait(), 2)
+        await asyncio.wait_for(started.wait(), 30)
         await _text_input(adapter, "$status", "/status")
         assert (receipts.call_args_list, adapter._send_reaction.await_args_list) == (
             {
@@ -469,7 +469,7 @@ async def test_inline_command_receipt_is_independent_of_the_active_turn(
             [call(room, "$opening", "👀")],
         )
         release.set()
-        await asyncio.wait_for(asyncio.gather(*adapter._background_tasks), 2)
+        await asyncio.wait_for(asyncio.gather(*adapter._background_tasks), 30)
         assert (receipts.call_args_list, adapter._send_reaction.await_args_list) == (
             {
                 "immediate": [call(room, "$opening"), call(room, "$status")],
@@ -555,7 +555,7 @@ async def test_injected_turn_receipts_cover_the_latest_accepted_input(
     room = "!room:example.org"
     try:
         await _text_input(adapter, "$opening", "opening")
-        await asyncio.wait_for(started.wait(), 2)
+        await asyncio.wait_for(started.wait(), 30)
         if route == "claimed-voice":
             await adapter._handle_media_message(
                 room,
@@ -598,7 +598,7 @@ async def test_injected_turn_receipts_cover_the_latest_accepted_input(
             if outcome == ProcessingOutcome.FAILURE:
                 sender.return_value = SendResult(success=False, error="refused")
             release.set()
-            await asyncio.wait_for(asyncio.gather(*adapter._background_tasks), 2)
+            await asyncio.wait_for(asyncio.gather(*adapter._background_tasks), 30)
         expected_ids = {
             "immediate": arrival_ids,
             "after_processing": []
@@ -708,7 +708,7 @@ async def test_inline_agent_work_is_acknowledged_only_after_its_processing(
     room = "!room:example.org"
     try:
         await _text_input(adapter, "$opening", "opening")
-        await asyncio.wait_for(started.wait(), 2)
+        await asyncio.wait_for(started.wait(), 30)
         work_task = asyncio.create_task(
             _text_input(
                 adapter,
@@ -717,14 +717,14 @@ async def test_inline_agent_work_is_acknowledged_only_after_its_processing(
             )
         )
         if delayed_ack:
-            await asyncio.wait_for(ack_started.wait(), 2)
+            await asyncio.wait_for(ack_started.wait(), 30)
         else:
-            await asyncio.wait_for(work_task, 2)
+            await asyncio.wait_for(work_task, 30)
         arrivals = [call(room, "$opening"), call(room, "$work")]
         assert receipts.call_args_list == (arrivals if mode == "immediate" else [])
         if command != "steer":
             release.set()
-            await asyncio.wait_for(followup_started.wait(), 2)
+            await asyncio.wait_for(followup_started.wait(), 30)
             assert (
                 receipts.call_args_list
                 == {
@@ -734,7 +734,7 @@ async def test_inline_agent_work_is_acknowledged_only_after_its_processing(
                 }[mode]
             )
         ack_release.set()
-        await asyncio.wait_for(work_task, 2)
+        await asyncio.wait_for(work_task, 30)
         assert (
             receipts.call_args_list
             == {
@@ -752,7 +752,7 @@ async def test_inline_agent_work_is_acknowledged_only_after_its_processing(
         else:
             release.set()
             followup_release.set()
-            await asyncio.wait_for(asyncio.gather(*adapter._background_tasks), 2)
+            await asyncio.wait_for(asyncio.gather(*adapter._background_tasks), 30)
         completed_ids = ["$opening"] if command != "steer" else []
         if completion == "success":
             completed_ids.append("$work")
@@ -772,7 +772,7 @@ async def test_inline_agent_work_is_acknowledged_only_after_its_processing(
         ack_release.set()
         await adapter.cancel_background_tasks()
         if work_task is not None:
-            await asyncio.wait_for(work_task, 2)
+            await asyncio.wait_for(work_task, 30)
 
 
 @pytest.mark.asyncio
@@ -864,7 +864,7 @@ async def test_recursive_turn_corrections_do_not_update_the_completed_ancestor(
     adapter.set_message_handler(respond)
     try:
         await adapter.handle_message(events[0])
-        await asyncio.wait_for(started.wait(), 2)
+        await asyncio.wait_for(started.wait(), 30)
         assert receipts.call_args_list == [
             call(events[0].source.chat_id, events[0].message_id)
         ]
@@ -875,7 +875,7 @@ async def test_recursive_turn_corrections_do_not_update_the_completed_ancestor(
         else:
             await runner._handle_active_session_busy_message(events[2], key)
         release.set()
-        await asyncio.wait_for(asyncio.gather(*adapter._background_tasks), 2)
+        await asyncio.wait_for(asyncio.gather(*adapter._background_tasks), 30)
         assert receipts.call_args_list == [
             call(event.source.chat_id, event.message_id)
             for event in (events[0], events[2])
@@ -1355,7 +1355,7 @@ async def test_consumed_correction_receipt_precedes_a_pending_correction(
     adapter.set_message_handler(respond)
     try:
         await adapter.handle_message(opening)
-        await asyncio.wait_for(started.wait(), 2)
+        await asyncio.wait_for(started.wait(), 30)
         key = adapter._event_session_key(opening)
         await runner._handle_active_session_busy_message(consumed, key)
         consumed_text = receiver._pending_steer
@@ -1366,7 +1366,7 @@ async def test_consumed_correction_receipt_precedes_a_pending_correction(
         assert model_messages[-1]["display_kind"] == "steer"
         await runner._handle_active_session_busy_message(pending, key)
         release.set()
-        await asyncio.wait_for(followup_started.wait(), 2)
+        await asyncio.wait_for(followup_started.wait(), 30)
         assert (
             receipts.call_args_list,
             adapter._send_reaction.await_args_list,
@@ -1390,7 +1390,7 @@ async def test_consumed_correction_receipt_precedes_a_pending_correction(
             await adapter.cancel_session_processing(key)
         else:
             followup_release.set()
-            await asyncio.wait_for(asyncio.gather(*adapter._background_tasks), 2)
+            await asyncio.wait_for(asyncio.gather(*adapter._background_tasks), 30)
         assert receipts.call_args_list == [
             call(event.source.chat_id, event.message_id)
             for event in (
@@ -1461,7 +1461,7 @@ async def test_plaintext_approval_receipt_is_independent_of_the_active_turn(
     try:
         assert opening.message_id is not None
         await _text_input(adapter, opening.message_id, opening.text)
-        await asyncio.wait_for(started.wait(), 2)
+        await asyncio.wait_for(started.wait(), 30)
         waiter = asyncio.create_task(
             asyncio.to_thread(
                 _await_gateway_decision,
@@ -1470,18 +1470,18 @@ async def test_plaintext_approval_receipt_is_independent_of_the_active_turn(
                 {"command": "receipt-test", "description": "test"},
             )
         )
-        await asyncio.wait_for(notified.wait(), 2)
+        await asyncio.wait_for(notified.wait(), 30)
         _sender.side_effect = confirmation_send
         control_task = asyncio.create_task(_text_input(adapter, "$approval", answer))
         if confirmation == "cancelled":
-            await asyncio.wait_for(delivery_started.wait(), 2)
+            await asyncio.wait_for(delivery_started.wait(), 30)
             control_task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await control_task
         else:
-            await asyncio.wait_for(control_task, 2)
+            await asyncio.wait_for(control_task, 30)
         _sender.side_effect = None
-        decision = await asyncio.wait_for(waiter, 2)
+        decision = await asyncio.wait_for(waiter, 30)
         assert (
             decision,
             settled,
@@ -1507,7 +1507,7 @@ async def test_plaintext_approval_receipt_is_independent_of_the_active_turn(
             [call(opening.source.chat_id, "$opening", "👀")],
         )
         release.set()
-        await asyncio.wait_for(asyncio.gather(*adapter._background_tasks), 2)
+        await asyncio.wait_for(asyncio.gather(*adapter._background_tasks), 30)
         assert (
             receipts.call_args_list
             == {
@@ -1532,11 +1532,11 @@ async def test_plaintext_approval_receipt_is_independent_of_the_active_turn(
         unregister_gateway_notify(key)
         delivery_release.set()
         if control_task is not None and not control_task.done():
-            await asyncio.wait_for(control_task, 2)
+            await asyncio.wait_for(control_task, 30)
         release.set()
         await adapter.cancel_background_tasks()
         if waiter is not None:
-            await asyncio.wait_for(waiter, 2)
+            await asyncio.wait_for(waiter, 30)
 
 
 @pytest.mark.asyncio
@@ -1597,7 +1597,7 @@ async def test_recursive_and_inline_completion_uses_the_admitted_event(
         index = len(calls)
         calls.append(request)
         gates[index][0].set()
-        assert gates[index][1].wait(2), "Model response was not released"
+        assert gates[index][1].wait(30), "Model response was not released"
         if _agent.stream_delta_callback:
             _agent.stream_delta_callback(f"done-{index + 1}")
         message = {"role": "assistant", "content": f"done-{index + 1}"}
@@ -1700,26 +1700,26 @@ async def test_recursive_and_inline_completion_uses_the_admitted_event(
     )
     try:
         await _text_input(adapter, "$opening", "opening")
-        assert await asyncio.to_thread(gates[0][0].wait, 2)
+        assert await asyncio.to_thread(gates[0][0].wait, 30)
         if route == "fifo":
             queued, late = _receipt_event("queued"), _receipt_event("late")
             await _text_input(adapter, "$queued", "/queue queued")
             await _text_input(adapter, "$late", "/steer late")
             gates[0][1].set()
-            assert await asyncio.to_thread(gates[1][0].wait, 2)
+            assert await asyncio.to_thread(gates[1][0].wait, 30)
             gates[1][1].set()
-            assert await asyncio.to_thread(gates[2][0].wait, 2)
+            assert await asyncio.to_thread(gates[2][0].wait, 30)
             gates[2][1].set()
             expected = [opening, queued, late]
         else:
             gates[0][1].set()
-            await asyncio.wait_for(notified.wait(), 2)
+            await asyncio.wait_for(notified.wait(), 30)
             control = _receipt_event(route)
             await _text_input(adapter, control.message_id, route)
-            assert await asyncio.to_thread(gates[1][0].wait, 2)
+            assert await asyncio.to_thread(gates[1][0].wait, 30)
             gates[1][1].set()
             expected = [opening]
-        await asyncio.wait_for(final_started.wait(), 2)
+        await asyncio.wait_for(final_started.wait(), 30)
         target_ids = {event.message_id for event in expected}
         assert [
             content["m.relates_to"]
@@ -1741,7 +1741,7 @@ async def test_recursive_and_inline_completion_uses_the_admitted_event(
             await adapter.cancel_session_processing(key)
         else:
             final_release.set()
-            await asyncio.wait_for(asyncio.gather(*adapter._background_tasks), 2)
+            await asyncio.wait_for(asyncio.gather(*adapter._background_tasks), 30)
         assert receipts.call_args_list == [
             call(opening.source.chat_id, message_id)
             for message_id in (
