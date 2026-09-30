@@ -193,6 +193,12 @@ class MatrixTurnContext:
             reply_to_author_authorized=authorized,
         )
 
+    def media_event(self, event: MessageEvent) -> MessageEvent:
+        return event.authored_media()
+
+    def authored_text(self, text: str) -> str:
+        return text
+
     def reply_image_paths(self) -> list[str]:
         return list(
             dict.fromkeys(

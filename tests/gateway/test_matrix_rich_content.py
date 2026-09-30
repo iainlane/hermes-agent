@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,15 +11,17 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from agent.context_references import preprocess_context_references_async
 from gateway.config import GatewayConfig, Platform, PlatformConfig
+from gateway.platforms.base import merge_pending_message_event
 from gateway.platforms.event import MessageType
 from gateway.run import GatewayRunner
-from gateway.session import SessionStore
-from gateway.session_state import SessionState
 from gateway.run_turn_runner import TurnRunner
+from gateway.session import SessionStore
 from gateway.turn_context import TurnContext
 from plugins.platforms.matrix.adapter import MatrixAdapter
 from plugins.platforms.matrix.read_context import read_matrix_context
+from plugins.platforms.matrix.reply_context import MatrixEventContext
 from plugins.platforms.matrix.thread_context import history_entry
 
 
@@ -95,12 +98,24 @@ def _event(kind: str) -> dict:
     }
 
 
-def _body(kind: str) -> str:
+def _typed(raw: dict):
+    return pytest.importorskip("mautrix.types").Event.deserialize(deepcopy(raw))
+
+
+def _body(kind: str, sender: str = SENDER) -> str:
     return (
-        f"[emote by {SENDER}] /new waves"
+        f"[emote by https://matrix.to/#/{sender}] /new waves"
         if kind == "emote"
         else "[sticker: Friendly fox.png]"
     )
+
+
+def _runner(adapter: MatrixAdapter, tmp_path: Path) -> GatewayRunner:
+    runner = object.__new__(GatewayRunner)
+    runner.config = GatewayConfig()
+    runner.session_store = SessionStore(tmp_path / "sessions", runner.config)
+    runner.adapters = {Platform.MATRIX: adapter}
+    return runner
 
 
 @pytest.mark.asyncio
@@ -114,6 +129,7 @@ def _body(kind: str) -> str:
             "mention-denied",
             "room-denied",
             "sender-denied",
+            "redacted-denied",
             "queued-redaction",
             "queued-edit",
         )
@@ -129,15 +145,15 @@ def _body(kind: str) -> str:
             "analysis-redaction",
             "analysis-edit",
             "invalid-url-denied",
+            "missing-url-denied",
             "download-oversize",
             "download-edit",
             "download-redaction",
         )
     ],
 )
-@pytest.mark.parametrize("typed", [False, True])
 async def test_native_content_reaches_model_with_actor_description_and_pixels(
-    monkeypatch, tmp_path, kind, scenario, typed
+    monkeypatch, tmp_path, kind, scenario
 ):
     adapter, received = _adapter(monkeypatch)
     raw = _event(kind)
@@ -153,6 +169,22 @@ async def test_native_content_reaches_model_with_actor_description_and_pixels(
         adapter._client.download_media.side_effect = OSError("unavailable")
     if scenario == "invalid-url-denied":
         raw["content"]["url"] = "https://example.org/fox.png"
+    if scenario == "missing-url-denied":
+        del raw["content"]["url"]
+    if scenario == "redacted-denied":
+        raw["content"] = {}
+        raw["unsigned"] = {
+            "age": 1,
+            "redacted_because": {
+                "type": "m.room.redaction",
+                "room_id": ROOM,
+                "sender": SENDER,
+                "event_id": "$redaction",
+                "origin_server_ts": 1000001,
+                "redacts": "$native",
+                "content": {},
+            },
+        }
     if scenario == "download-oversize":
         raw["content"]["info"]["size"] = 1
         adapter._max_media_bytes = len(PNG) - 1
@@ -198,12 +230,7 @@ async def test_native_content_reaches_model_with_actor_description_and_pixels(
             "hashes": {},
             "v": "v2",
         }
-    incoming = (
-        pytest.importorskip("mautrix.types").Event.deserialize(deepcopy(raw))
-        if typed
-        else raw
-    )
-    await adapter._on_room_message(incoming)
+    await adapter._on_room_message(_typed(raw))
     if scenario.endswith("denied"):
         assert (
             received.await_count,
@@ -236,10 +263,7 @@ async def test_native_content_reaches_model_with_actor_description_and_pixels(
         "thread": "$root",
         "id": "$native",
     }
-    runner = object.__new__(GatewayRunner)
-    runner.config = GatewayConfig()
-    runner.session_store = SessionStore(tmp_path / "sessions", runner.config)
-    runner.adapters = {Platform.MATRIX: adapter}
+    runner = _runner(adapter, tmp_path)
     monkeypatch.setattr(runner, "_decide_image_input_mode", lambda **_kwargs: "native")
     if scenario.startswith("analysis"):
         monkeypatch.setattr(
@@ -286,7 +310,7 @@ async def test_native_content_reaches_model_with_actor_description_and_pixels(
         )
         if kind == "emote":
             replacement["msgtype"] = "m.emote"
-        await adapter._on_room_message({
+        edit = {
             **raw,
             "event_id": "$edit",
             "content": {
@@ -295,7 +319,15 @@ async def test_native_content_reaches_model_with_actor_description_and_pixels(
                 "m.new_content": replacement,
                 "m.relates_to": {"rel_type": "m.replace", "event_id": "$native"},
             },
-        })
+        }
+
+        async def edited(_method, path, **_kwargs):
+            if "/event/" in path:
+                return {**raw, "unsigned": {"m.relations": {"m.replace": edit}}}
+            return {"chunk": []}
+
+        adapter._client.api.request.side_effect = edited
+        await adapter._on_room_message(_typed(edit))
     prepared = await runner._prepare_inbound_message_text(
         event=event,
         source=event.source,
@@ -364,7 +396,7 @@ async def test_native_content_has_consistent_effective_reads_history_and_reply_p
     if scenario == "bounded":
         raw["content"]["body"] = "Untrusted description " * 1000
         body = (
-            f"[emote by {SENDER}] " + raw["content"]["body"]
+            f"[emote by https://matrix.to/#/{SENDER}] " + raw["content"]["body"]
             if kind == "emote"
             else "[sticker: " + raw["content"]["body"].strip() + "]"
         ).strip()
@@ -394,10 +426,13 @@ async def test_native_content_has_consistent_effective_reads_history_and_reply_p
             "skipped": 0,
         }
         parsed = await history_entry(
-            adapter._client, raw, adapter._event_context_cache, ROOM, before=None
+            adapter._client, raw, adapter._event_context_cache, ROOM,
+            before=adapter._event_context_cache.history_entry(ROOM, "$native"),
         )
         assert parsed is not None
-        assert (parsed[0].sender, parsed[0].state_error) == (SENDER, "missing decryption keys")
+        assert parsed[0] == MatrixEventContext(
+            SENDER, "", state_error="missing decryption keys", event_id="$native",
+        )
         return
     assert read == {
         "events": [
@@ -415,7 +450,8 @@ async def test_native_content_has_consistent_effective_reads_history_and_reply_p
         "skipped": 0,
     }
     parsed = await history_entry(
-        adapter._client, raw, adapter._event_context_cache, ROOM, before=None
+        adapter._client, raw, adapter._event_context_cache, ROOM,
+        before=adapter._event_context_cache.history_entry(ROOM, "$native"),
     )
     assert parsed is not None and parsed[0].text == body
     parent = await adapter._event_context_cache.resolve(
@@ -445,84 +481,277 @@ async def test_native_content_has_consistent_effective_reads_history_and_reply_p
 
 
 @pytest.mark.asyncio
-async def test_edited_emote_rewrites_its_own_text_not_an_identical_quote(
-    monkeypatch, tmp_path
+@pytest.mark.parametrize(
+    "method,kinds",
+    [
+        ("queued", ("sticker", "sticker")),
+        ("queued-duplicate", ("sticker", "sticker")),
+        ("queued", ("text", "sticker")),
+        ("queued", ("sticker", "emote")),
+        ("queued-text", ("emote", "emote")),
+        ("debounce", ("emote", "emote")),
+        ("debounce-duplicate", ("emote", "emote")),
+        ("debounce", ("text", "emote")),
+        ("busy-debounce", ("emote", "emote")),
+    ],
+)
+@pytest.mark.parametrize("withdrawn", [0, 1])
+@pytest.mark.parametrize("mode", ["native", "text"])
+async def test_coalesced_native_content_revalidates_each_authored_event(
+    monkeypatch, tmp_path, method, kinds, withdrawn, mode
 ):
     adapter, received = _adapter(monkeypatch)
-    emote = {
-        "type": "m.room.message",
-        "room_id": ROOM,
-        "sender": SENDER,
-        "origin_server_ts": 1000000,
-    }
-    await adapter._on_room_message(
-        {**emote, "event_id": "$first", "content": {"msgtype": "m.emote", "body": "waves"}}
-    )
-    await adapter._on_room_message({
-        **emote,
-        "event_id": "$native",
-        "content": {
-            "msgtype": "m.emote",
-            "body": "waves",
-            "m.relates_to": {"m.in_reply_to": {"event_id": "$first"}},
-        },
-    })
-    event = received.await_args_list[-1].args[0]
-    await adapter._on_room_message({
-        **emote,
-        "event_id": "$edit",
-        "content": {
-            "msgtype": "m.emote",
-            "body": "* waves again",
-            "m.new_content": {"msgtype": "m.emote", "body": "waves again"},
-            "m.relates_to": {"rel_type": "m.replace", "event_id": "$native"},
-        },
-    })
-    runner = object.__new__(GatewayRunner)
-    runner.config = GatewayConfig()
-    runner.session_store = SessionStore(tmp_path / "sessions", runner.config)
-    runner.adapters = {Platform.MATRIX: adapter}
+    duplicate = method.endswith("-duplicate")
+    method = method.removesuffix("-duplicate")
+    admitted = []
+    for index, kind in enumerate(kinds):
+        raw = _event(kind)
+        raw["event_id"] = f"$native{index}"
+        raw["content"]["body"] = f"Authored contribution {0 if duplicate else index}"
+        if kind == "text":
+            raw["type"] = "m.room.message"
+            raw["content"]["msgtype"] = "m.text"
+        incoming = _typed(raw)
+        await adapter._on_room_message(incoming)
+        admitted.append(received.await_args.args[0])
+    expected_text = [event.text for event in admitted]
+    expected_paths = [list(event.authored_media().media_urls) for event in admitted]
+    if method in {"debounce", "busy-debounce"}:
+        blocked = asyncio.Event()
 
+        async def pause_flush(*_args):
+            await blocked.wait()
+
+        if method == "debounce":
+            monkeypatch.setattr(adapter, "_flush_text_batch", pause_flush)
+            for event in admitted:
+                adapter._enqueue_text_event(event)
+            event = next(iter(adapter._pending_text_batches.values()))
+            tasks = tuple(adapter._pending_text_batch_tasks.values())
+        else:
+            monkeypatch.setattr(adapter, "_flush_text_debounce", pause_flush)
+            for event in admitted:
+                await adapter._queue_text_debounce("session", event)
+            state = adapter._text_debounce_store()["session"]
+            event = state.event
+            tasks = (state.task,)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+    else:
+        pending = {}
+        for event in admitted:
+            merge_pending_message_event(
+                pending, "session", event, merge_text=method == "queued-text"
+            )
+        event = pending["session"]
+    all_paths = [path for paths in expected_paths for path in paths]
+    runner = _runner(adapter, tmp_path)
+    monkeypatch.setattr(runner, "_decide_image_input_mode", lambda **_kwargs: mode)
+
+    async def withdraw():
+        await adapter._on_redaction(
+            SimpleNamespace(room_id=ROOM, redacts=f"$native{withdrawn}")
+        )
+
+    async def analyse(_text, paths):
+        await withdraw()
+        return "\n\n".join(f"<pixels of {path}>" for path in paths)
+
+    if mode == "text" and all_paths:
+        monkeypatch.setattr(runner, "_enrich_message_with_vision", analyse)
+    else:
+        await withdraw()
     prepared = await runner._prepare_inbound_message_text(
-        event=event, source=event.source, history=[{}], session_key="session",
+        event=event, source=event.source, history=[{}], session_key="session"
     )
-
-    assert prepared == (
-        f'[Replying to Alice: "[emote by {SENDER}] waves"]\n\n'
-        f"[emote by {SENDER}] waves again"
-    )
+    removed = kinds[withdrawn] != "text"
+    retained = [
+        path
+        for index, paths in enumerate(expected_paths)
+        if index != withdrawn or not removed
+        for path in paths
+    ]
+    assert {
+        "visible": [text in prepared for text in expected_text],
+        "paths": event._prepared_inbound.retained_image_paths(all_paths),
+        "descriptions": [f"<pixels of {path}>" in prepared for path in all_paths],
+        "redacted": "[redacted]" in prepared,
+    } == {
+        "visible": [
+            duplicate or index != withdrawn or not removed for index in range(2)
+        ],
+        "paths": retained,
+        "descriptions": [mode == "text" and path in retained for path in all_paths],
+        "redacted": removed,
+    }
 
 
 @pytest.mark.asyncio
-async def test_oversized_media_reaches_a_live_session_as_its_marker(monkeypatch, tmp_path):
+@pytest.mark.parametrize("kind", ["emote", "sticker"])
+async def test_unchanged_effective_read_preserves_mention_stripped_native_input(
+    monkeypatch, kind
+):
     adapter, received = _adapter(monkeypatch)
-    adapter._max_media_bytes = 10
-    await adapter._on_room_message({
+    adapter._require_mention = True
+    raw = _event(kind)
+    raw["content"].update(
+        body="@hermes:example.org Friendly fox",
+        **{"m.mentions": {"user_ids": ["@hermes:example.org"]}},
+    )
+    incoming = _typed(raw)
+    await adapter._on_room_message(incoming)
+    event = received.await_args.args[0]
+    original = {"text": event.text, "paths": list(event.authored_media().media_urls)}
+
+    async def request(_method, path, **_kwargs):
+        return raw if "/event/" in path else {"chunk": []}
+
+    adapter._client.api.request.side_effect = request
+    await read_matrix_context(adapter, "event", ROOM, "$native", 1, requester=SENDER)
+    snapshot = await adapter.fetch_inbound_context(event)
+    await snapshot.refresh()
+    assert {
+        "text": snapshot.authored_text(event.text),
+        "paths": snapshot.media_event(event).media_urls,
+    } == original
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sender",
+    [
+        "@file:example.org",
+        "@url:example.org",
+        "@diff-bot:example.org",
+        "@historical.@file:example.org",
+    ],
+)
+async def test_emote_attribution_is_not_a_context_reference(
+    monkeypatch, tmp_path, sender
+):
+    (tmp_path / "example.org").write_text("local file")
+    adapter, received = _adapter(monkeypatch)
+    raw = _event("emote")
+    raw["sender"] = sender
+    await adapter._on_room_message(_typed(raw))
+    text = received.await_args.args[0].text
+    result = await preprocess_context_references_async(
+        text,
+        cwd=tmp_path,
+        context_length=100_000,
+        url_fetcher=lambda _url: "fetched page",
+        allowed_root=tmp_path,
+    )
+    assert (result.expanded, result.references, result.message) == (False, [], text)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["emote", "sticker"])
+async def test_reply_to_unadmitted_native_event_quotes_only_its_own_text(
+    monkeypatch, kind
+):
+    adapter, received = _adapter(monkeypatch)
+    adapter._require_mention = True
+    bob = "@bob:example.org"
+    raw = _event(kind)
+    raw["sender"] = bob
+    raw["content"]["body"] = (
+        "> <@carol:example.org> private grandparent\n\n" + raw["content"]["body"]
+    )
+    raw["content"]["m.relates_to"] = {"m.in_reply_to": {"event_id": "$grandparent"}}
+    await adapter._on_room_message(_typed(raw))
+    assert received.await_count == 0
+    await adapter._on_room_message(_typed({
         "type": "m.room.message",
         "room_id": ROOM,
         "sender": SENDER,
-        "event_id": "$file",
+        "event_id": "$question",
         "origin_server_ts": 1000000,
         "content": {
-            "msgtype": "m.file",
-            "body": "Please review this file",
-            "filename": "oversized.txt",
-            "url": "mxc://example.org/oversized",
-            "info": {"mimetype": "text/plain", "size": 11},
+            "msgtype": "m.text",
+            "body": "@hermes:example.org what was that?",
+            "m.mentions": {"user_ids": ["@hermes:example.org"]},
+            "m.relates_to": {"m.in_reply_to": {"event_id": "$native"}},
         },
-    })
+    }))
+    assert received.await_args.args[0].reply_to_text == _body(kind, bob)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("withdrawn", [False, True])
+async def test_withdrawal_replaces_the_message_not_an_identical_reply_quote(
+    monkeypatch, tmp_path, withdrawn
+):
+    adapter, received = _adapter(monkeypatch)
+    adapter._event_context_cache.store(
+        ROOM, "$parent", MatrixEventContext("@bob:example.org", _body("sticker"))
+    )
+    raw = _event("sticker")
+    raw["content"]["m.relates_to"] = {"m.in_reply_to": {"event_id": "$parent"}}
+    await adapter._on_room_message(_typed(raw))
     event = received.await_args.args[0]
-    runner = object.__new__(GatewayRunner)
-    runner.config = GatewayConfig()
-    runner.session_store = SessionStore(tmp_path / "sessions", runner.config)
-    runner._sessions = {"session": SessionState()}
-    runner.adapters = {Platform.MATRIX: adapter}
+    if withdrawn:
+        await adapter._on_redaction(SimpleNamespace(room_id=ROOM, redacts="$native"))
+    runner = _runner(adapter, tmp_path)
+    monkeypatch.setattr(runner, "_decide_image_input_mode", lambda **_kwargs: "native")
 
     prepared = await runner._prepare_inbound_message_text(
-        event=event, source=event.source, history=[{}], session_key="session",
+        event=event, source=event.source, history=[{}], session_key="session"
     )
 
-    assert (prepared, runner._sessions["session"].persistent.native_image_paths) == (
-        "Please review this file\n[matrix file attachment too large: oversized.txt]", [],
+    message = "[redacted]" if withdrawn else _body("sticker")
+    assert prepared == f'[Replying to Alice: "{_body("sticker")}"]\n\n{message}'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("encrypted", [False, True])
+async def test_room_read_shows_stickers(monkeypatch, encrypted):
+    adapter, _received = _adapter(monkeypatch)
+    sticker = _event("sticker")
+    wire = (
+        {
+            **sticker,
+            "type": "m.room.encrypted",
+            "content": {
+                "algorithm": "m.megolm.v1.aes-sha2",
+                "session_id": "session",
+                "ciphertext": "sticker",
+                "m.relates_to": sticker["content"]["m.relates_to"],
+            },
+        }
+        if encrypted
+        else sticker
     )
-    adapter._client.download_media.assert_not_awaited()
+
+    async def decrypt(_client, _raw):
+        return _typed(sticker)
+
+    async def request(_method, path, **_kwargs):
+        return {"chunk": [wire] if path.endswith("/messages") else []}
+
+    monkeypatch.setattr(
+        "plugins.platforms.matrix.effective_event.decrypt_history_event", decrypt
+    )
+    adapter._client.api.request.side_effect = request
+    adapter._client.sync_store = SimpleNamespace(
+        get_next_batch=AsyncMock(return_value="s1")
+    )
+
+    read = await read_matrix_context(adapter, "room", ROOM, None, 5, requester=SENDER)
+
+    assert read == {
+        "events": [
+            {
+                "event_id": "$native",
+                "sender": SENDER,
+                "body": _body("sticker"),
+                "msgtype": "m.sticker",
+                "thread_id": "$root",
+                "timestamp": 1000000,
+                "sender_authorized": True,
+            }
+        ],
+        "errors": [],
+        "skipped": 0,
+    }

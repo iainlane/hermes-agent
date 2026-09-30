@@ -420,10 +420,10 @@ def gateway(
                 f"MATRIX_HOME_ROOM={room_id}\n"
                 "MATRIX_E2EE_MODE=optional\nMATRIX_REACTIONS=false\nMATRIX_AUTO_THREAD=false\n"
             )
-            if settings.max_media_bytes is not None:
-                stream.write(f"MATRIX_MAX_MEDIA_BYTES={settings.max_media_bytes}\n")
             if settings.max_message_length is not None:
                 stream.write(f"MATRIX_MAX_MESSAGE_LENGTH={settings.max_message_length}\n")
+            if settings.max_media_bytes is not None:
+                stream.write(f"MATRIX_MAX_MEDIA_BYTES={settings.max_media_bytes}\n")
         if context_pause:
             plugin = home / "plugins" / "matrix-live-context"
             plugin.mkdir(parents=True)
@@ -447,6 +447,14 @@ def gateway(
                 "    async def expand(self, target):\n"
                 "        signal('context-started', 'started')\n"
                 "        while not (get_hermes_home() / 'context-release').exists():\n"
+                "            request = get_hermes_home() / 'read-effective-event'\n"
+                "            done = get_hermes_home() / 'effective-event-read'\n"
+                "            if request.exists() and not done.exists():\n"
+                "                import json\n"
+                "                from plugins.platforms.matrix.read_context import read_matrix_context\n"
+                "                target = json.loads(request.read_text(encoding='utf-8'))\n"
+                "                result = await read_matrix_context(matrix_adapter, 'event', target['room'], target['event'], 1, requester=target['sender'])\n"
+                "                signal('effective-event-read', json.dumps(result))\n"
                 "            await asyncio.sleep(0.01)\n"
                 "        return 'Live enrichment completed'\n"
                 "def register(ctx):\n"
@@ -480,6 +488,8 @@ def gateway(
                     "    original_init(self, *args, **kwargs)\n"
                     "    if self.platform.value != 'matrix':\n"
                     "        return\n"
+                    "    global matrix_adapter\n"
+                    "    matrix_adapter = self\n"
                     "    original_message = self._on_room_message\n"
                     "    async def observed_message(event):\n"
                     "        from plugins.platforms.matrix.effective_event import event_content\n"
@@ -489,6 +499,11 @@ def gateway(
                     "            import gc\n"
                     "            gc.collect()\n"
                     "        await original_message(event)\n"
+                    "        if 'queued sticker' in str(event_content(event).get('body', '')):\n"
+                    "            marker = get_hermes_home() / 'rich-events-queued'\n"
+                    "            event_id = event.get('event_id') if isinstance(event, dict) else str(event.event_id)\n"
+                    "            with marker.open('a', encoding='utf-8') as stream:\n"
+                    "                stream.write(event_id + '\\n')\n"
                     "        if queued:\n"
                     "            signal('reply-queued', 'queued')\n"
                     "        expected = get_hermes_home() / 'expected-media-change'\n"
