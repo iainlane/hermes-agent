@@ -35,6 +35,12 @@ def _make_event(
     )
 
 
+async def _wait_for_flush(adapter) -> None:
+    await asyncio.wait_for(
+        asyncio.gather(*adapter._pending_text_batch_tasks.values()), timeout=5.0
+    )
+
+
 # =====================================================================
 # Discord text batching
 # =====================================================================
@@ -69,8 +75,7 @@ class TestDiscordTextBatching:
         # Not dispatched yet
         adapter.handle_message.assert_not_called()
 
-        # Wait for flush
-        await asyncio.sleep(0.2)
+        await _wait_for_flush(adapter)
 
         adapter.handle_message.assert_called_once()
         dispatched = adapter.handle_message.call_args[0][0]
@@ -87,7 +92,7 @@ class TestDiscordTextBatching:
 
         adapter.handle_message.assert_not_called()
 
-        await asyncio.sleep(0.2)
+        await _wait_for_flush(adapter)
 
         adapter.handle_message.assert_called_once()
         text = adapter.handle_message.call_args[0][0].text
@@ -129,7 +134,7 @@ class TestMatrixTextBatching:
         adapter._enqueue_text_event(event)
 
         adapter.handle_message.assert_not_called()
-        await asyncio.gather(*adapter._pending_text_batch_tasks.values())
+        await _wait_for_flush(adapter)
 
         adapter.handle_message.assert_called_once()
         assert adapter.handle_message.call_args[0][0].text == "hello world"
@@ -142,7 +147,7 @@ class TestMatrixTextBatching:
         adapter._enqueue_text_event(_make_event("second part", Platform.MATRIX))
 
         adapter.handle_message.assert_not_called()
-        await asyncio.gather(*adapter._pending_text_batch_tasks.values())
+        await _wait_for_flush(adapter)
 
         adapter.handle_message.assert_called_once()
         text = adapter.handle_message.call_args[0][0].text
@@ -182,7 +187,7 @@ class TestWeComTextBatching:
         adapter._enqueue_text_event(event)
 
         adapter.handle_message.assert_not_called()
-        await asyncio.sleep(0.2)
+        await _wait_for_flush(adapter)
 
         adapter.handle_message.assert_called_once()
         assert adapter.handle_message.call_args[0][0].text == "hello world"
@@ -196,7 +201,7 @@ class TestWeComTextBatching:
         adapter._enqueue_text_event(_make_event("second part", Platform.WECOM))
 
         adapter.handle_message.assert_not_called()
-        await asyncio.sleep(0.2)
+        await _wait_for_flush(adapter)
 
         adapter.handle_message.assert_called_once()
         text = adapter.handle_message.call_args[0][0].text
