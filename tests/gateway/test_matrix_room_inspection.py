@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from plugins.platforms.matrix.reply_context import MatrixEventContextCache
 from plugins.platforms.matrix.room_inspection import inspect_matrix_room
 
 
@@ -45,6 +46,7 @@ async def test_room_inspection_reports_state_members_permissions_and_pins():
     )
     adapter = SimpleNamespace(
         _client=client, _joined_rooms={"!room:server"}, _user_id="@bot:server",
+        _event_context_cache=MatrixEventContextCache(),
         _is_allowed_matrix_room_event=AsyncMock(return_value=True),
         _is_dm_room=AsyncMock(return_value=True),
         _is_sender_authorized=lambda user, **kw: user == "@alice:server",

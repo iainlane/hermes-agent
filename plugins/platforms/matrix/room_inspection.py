@@ -7,7 +7,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
-from plugins.platforms.matrix.read_context import _read_access, _raw_event, _visible_event
+from plugins.platforms.matrix.client_events import raw_event
+from plugins.platforms.matrix.read_context import _read_access, _visible_event
 
 
 def _content(value: Any) -> dict[str, Any]:
@@ -117,13 +118,16 @@ async def _permissions(client: Any, room_id: str, requester: str, bot: str) -> d
 async def _pinned_event(
     adapter: Any, client: Any, room_id: str, chat_type: str, event_id: str,
 ) -> tuple[dict | None, dict | None]:
+    cache = adapter._event_context_cache
+    before = cache.retain(room_id, event_id)
     try:
-        raw = _raw_event(await asyncio.wait_for(client.get_event(room_id, event_id), timeout=10.0))
+        raw = raw_event(await asyncio.wait_for(client.get_event(room_id, event_id), timeout=10.0))
     except Exception as exc:
         return None, {"event_id": event_id, "error": f"Matrix event read failed: {type(exc).__name__}"}
     if raw.get("event_id") != event_id:
         return None, {"event_id": event_id, "error": "Matrix event was not returned"}
-    visible, error = await _visible_event(adapter, raw, room_id, chat_type)
+    _retained = cache.retain_events(room_id, [raw])
+    visible, error, _replacement_id = await _visible_event(adapter, raw, room_id, chat_type, before=before)
     if visible is None and error is None:
         error = {"event_id": event_id, "error": "event has no visible message"}
     return visible, error
