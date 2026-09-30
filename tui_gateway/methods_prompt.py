@@ -6,6 +6,13 @@ method_ctx.bind_module), so they reference server.py globals bare.
 
 import contextlib
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import threading
+
+    from .session_lifecycle import _decide_submit_thread
+
 from .method_ctx import HandlerRegistry, bind_module
 
 _registry = HandlerRegistry()
@@ -821,20 +828,17 @@ def _(rid, params: dict) -> dict:
     # A completed FAILED build must not wedge the session: rebuild, don't replay it.
     if not _restart_completed_failed_agent_build(sid, session, session.get("agent_ready")):
         _start_agent_build(sid, session)
-    run_thread = threading.Thread(
-        target=lambda: _run_after_agent_ready(
-            rid, sid, session, text, display_kind, display_metadata, hosted_terminal_callback, turn_author,
-            turn_generation=turn_generation),
-        daemon=True)
-    with session["history_lock"]:
-        # Check the claim and publish in one critical section: a submit whose claim a later one has
-        # replaced must not overwrite that turn's handle, which session.interrupt uses to tell a live
-        # turn from a stuck `running` flag.
-        if claimed := _holds_submit_claim(session, turn_generation):
-            session["_run_thread"] = run_thread
-    if not claimed:
+    decision: list[bool] = []
+
+    def run():
+        if _decide_submit_thread(session, threading.current_thread(), turn_generation, decision):
+            _run_after_agent_ready(
+                        rid, sid, session, text, display_kind, display_metadata, hosted_terminal_callback, turn_author,
+                        turn_generation=turn_generation)
+
+    run_thread = threading.Thread(target=run, daemon=True)
+    if not _start_turn_thread(session, run_thread, turn_generation=turn_generation, decision=decision):
         return _superseded_submit_error(rid)
-    run_thread.start()
     return _ok(rid, {"status": "streaming", **survivor_fields})
 
 
