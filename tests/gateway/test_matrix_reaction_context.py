@@ -382,7 +382,8 @@ async def test_event_read_reports_incomplete_reactions_against_the_target():
         crypto=SimpleNamespace(decrypt_megolm_event=decrypt),
         api=SimpleNamespace(request=AsyncMock(side_effect=request)),
     )
-    adapter = SimpleNamespace(
+    adapter = _make_adapter()
+    vars(adapter).update(
         _event_context_cache=MatrixEventContextCache(),
         _client=client, _joined_rooms={room_id}, _user_id="@bot:example.org",
         _is_allowed_matrix_room_event=AsyncMock(return_value=True),

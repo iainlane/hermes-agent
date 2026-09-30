@@ -45,7 +45,9 @@ def _adapter(client, **overrides):
         _is_sender_authorized=lambda user, **kw: user == "@alice:server",
     )
     values.update(overrides)
-    return SimpleNamespace(**values)
+    adapter = _make_adapter()
+    vars(adapter).update(values)
+    return adapter
 
 
 def test_gateway_binds_receiving_adapter_and_gateway_loop_for_matrix_reads():
