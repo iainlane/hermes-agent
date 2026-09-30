@@ -342,7 +342,7 @@ def test_reaction_to_encrypted_split_final_resumes_after_restart(
         latest_user = [
             message["content"] for message in messages if message["role"] == "user"
         ][-1]
-        excerpt = final[:REPLY_EXCERPT_CHARS]
+        excerpt = final[:REPLY_EXCERPT_CHARS].replace("\n", "\\n")
         assert f'[Replying to your previous message: "{excerpt}"]' in latest_user
         assert (
             f"Matrix reaction by {live_room.observer.user_id}: 👍 on reply {event_ids[-1]}"
