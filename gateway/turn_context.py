@@ -8,7 +8,10 @@ single-element lists so mutation stays visible to the outer body.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, List, Optional
+
+if TYPE_CHECKING:
+    from gateway.inbound_context import PreparedInboundMessage
 
 from gateway.platforms.event import MessageEvent
 
@@ -44,6 +47,7 @@ class TurnContext:
     _progress_metadata: Optional[dict] = None
     _progress_reply_to: Optional[Any] = None
     message: Optional[str] = None  # the only rebindable field
+    input_snapshot: Optional[PreparedInboundMessage] = None
     # turn parameters / config snapshots (read-only in run_sync)
     history: Any = None
     context_prompt: Optional[str] = None
@@ -58,6 +62,7 @@ class TurnContext:
     # Raw inbound platform id (not the event_message_id reply anchor); stamped on the user turn.
     inbound_message_id: Optional[str] = None
     moa_config: Optional[dict] = None
+    title_user_message: Optional[str] = None
     persist_user_message: Optional[Any] = None
     persist_user_timestamp: Optional[float] = None
     # display_kind of the persisted user row for a self-injected turn; DB-only, never sent.

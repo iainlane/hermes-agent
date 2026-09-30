@@ -4,7 +4,7 @@ A leaf module: adapters, helpers and the runner import it, so it must not import
 gateway.platforms.*.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from gateway.session import SessionSource
 
 if TYPE_CHECKING:
+    from gateway.inbound_context import InboundContextSnapshot, PreparedInboundMessage
     from gateway.platforms.base import BasePlatformAdapter
 
 
@@ -119,6 +120,27 @@ class _ProcessingState:
         return self.complete()
 
 
+@dataclass(frozen=True)
+class QuotedMediaDependency:
+    """A media attachment whose content depends on another platform event."""
+    room_id: str
+    event_id: str
+    media_index: int
+    content_id: str
+
+
+@dataclass(frozen=True)
+class TurnContextUpdate:
+    """What ``BasePlatformAdapter.prepare_turn_context`` reports for one turn.
+
+    ``note`` is prepended to the user message. ``channel_state`` is saved with the user transcript
+    row, so the change is acknowledged only when the turn that reported it is saved. It is ``None``
+    when the adapter could not read the chat state, and the saved state then stays unchanged.
+    """
+    note: Optional[str]
+    channel_state: Optional[Dict[str, Any]]
+
+
 @dataclass
 class MessageEvent:
     """Incoming message from a platform — the normalized shape all adapters produce."""
@@ -179,7 +201,14 @@ class MessageEvent:
     # knows the message was meant for someone else); None means unknown and keeps the visible
     # fallback, like True.
     reply_expected: Optional[bool] = None
+    # Whether the quoted author passed the adapter's authorisation check; None when the adapter
+    # did not check. The reply pointer identifies the author only when this is set.
     reply_to_author_authorized: Optional[bool] = None
+    # IDs of later events merged into this one; ``message_id`` remains the first event's ID.
+    merged_message_ids: List[str] = field(default_factory=list)
+    # Snapshot from ``BasePlatformAdapter.prepare_turn_context``. The user transcript row saves it,
+    # and the saved snapshot is the baseline for the adapter's next comparison.
+    channel_state: Optional[Dict[str, Any]] = None
     # dataclasses.replace shares this mutable state with the adapter's original event.
     _processing_state: _ProcessingState = field(default_factory=_ProcessingState, repr=False, compare=False)
     _voice_preparation: _VoicePreparation = field(default_factory=_VoicePreparation, repr=False, compare=False)
@@ -188,16 +217,24 @@ class MessageEvent:
     _gateway_accepted: bool = field(default=False, init=False, repr=False, compare=False)
     # Run-owned final presentation snapshot; never deserialized from ingress metadata.
     _notification_reply_muted: Optional[bool] = field(default=None, init=False, repr=False, compare=False)
+    _prepared_inbound: Optional["PreparedInboundMessage"] = field(default=None, init=False, repr=False, compare=False)
+    _quoted_media_dependencies: tuple[QuotedMediaDependency, ...] = field(
+        default=(), kw_only=True, repr=False, compare=False,
+    )
+
+    _inbound_context_dependencies: tuple["InboundContextSnapshot", ...] = field(
+        default=(), kw_only=True, repr=False, compare=False,
+    )
 
     def absorb_reply_expected(self, other: "MessageEvent") -> None:
         """One turn now answers *other* too: an addressed message wins, then an unknown one."""
         if self.reply_expected is not True and other.reply_expected is not False:
             self.reply_expected = other.reply_expected
 
-    def append_channel_context(self, context: Optional[str]) -> None:
-        if not context:
-            return
-        self.channel_context = f"{self.channel_context}\n{context}" if self.channel_context else context
+    def absorb_message_ids(self, other: "MessageEvent") -> None:
+        self.merged_message_ids.extend(
+            message_id for message_id in (other.message_id, *other.merged_message_ids) if message_id
+        )
 
     def absorb_reply_context(self, other: "MessageEvent") -> None:
         if self.reply_to_text or not other.reply_to_text:
@@ -209,6 +246,53 @@ class MessageEvent:
         self.reply_to_author_name = other.reply_to_author_name
         self.reply_to_is_own_message = other.reply_to_is_own_message
         self.reply_to_author_authorized = other.reply_to_author_authorized
+        self._inbound_context_dependencies += other._inbound_context_dependencies
+
+    def absorb_media(self, other: "MessageEvent") -> None:
+        """Append attachments with their inline flags and quoted-event dependencies."""
+        self._inbound_context_dependencies += tuple(
+            dependency for dependency in other._inbound_context_dependencies
+            if all(dependency is not existing for existing in self._inbound_context_dependencies)
+        )
+        offset = len(self.media_urls)
+        self.media_text_inlined = [
+            *self.media_text_inlined,
+            *([None] * (offset - len(self.media_text_inlined))),
+            *other.media_text_inlined,
+            *([None] * (len(other.media_urls) - len(other.media_text_inlined))),
+        ]
+        self.media_urls.extend(other.media_urls)
+        self.media_types.extend(other.media_types)
+        self._quoted_media_dependencies += tuple(
+            replace(dependency, media_index=dependency.media_index + offset)
+            for dependency in other._quoted_media_dependencies
+        )
+
+    def authored_media(self) -> "MessageEvent":
+        """Return attachments that do not depend on a quoted event."""
+        quoted = {
+            dependency.media_index for dependency in self._quoted_media_dependencies
+        }
+        indices = [
+            index for index in range(len(self.media_urls)) if index not in quoted
+        ]
+        return replace(
+            self,
+            media_urls=[self.media_urls[index] for index in indices],
+            media_types=[
+                self.media_types[index]
+                for index in indices
+                if index < len(self.media_types)
+            ],
+            media_text_inlined=[
+                self.media_text_inlined[index]
+                if index < len(self.media_text_inlined)
+                else None
+                for index in indices
+            ],
+            _quoted_media_dependencies=(),
+        )
+
     def absorb_turn_input(self, other: "MessageEvent", *, input_text: Optional[str] = None) -> None:
         self.absorb_reply_expected(other)
         receipt_id = other.receipt_message_id
