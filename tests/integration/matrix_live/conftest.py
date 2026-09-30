@@ -76,6 +76,7 @@ class LiveGateway:
 class GatewaySettings:
     reply: str = "Matrix live reply"
     max_message_length: int | None = None
+    max_media_bytes: int | None = None
     mode: str | None = None
 
 
@@ -419,8 +420,8 @@ def gateway(
                 f"MATRIX_HOME_ROOM={room_id}\n"
                 "MATRIX_E2EE_MODE=optional\nMATRIX_REACTIONS=false\nMATRIX_AUTO_THREAD=false\n"
             )
-            if hasattr(request, "param"):
-                stream.write(f"MATRIX_MAX_MEDIA_BYTES={request.param}\n")
+            if settings.max_media_bytes is not None:
+                stream.write(f"MATRIX_MAX_MEDIA_BYTES={settings.max_media_bytes}\n")
             if settings.max_message_length is not None:
                 stream.write(f"MATRIX_MAX_MESSAGE_LENGTH={settings.max_message_length}\n")
         if context_pause:

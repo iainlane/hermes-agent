@@ -10,7 +10,7 @@ import time
 import pytest
 from nio import RoomMessageText, RoomSendResponse, UploadResponse
 
-from tests.integration.matrix_live.conftest import LiveGateway, LiveRoom
+from tests.integration.matrix_live.conftest import GatewaySettings, LiveGateway, LiveRoom
 
 
 def test_media_caption_and_filename_reach_model_through_cache(
@@ -93,7 +93,7 @@ def test_media_caption_and_filename_reach_model_through_cache(
     asyncio.run(exchange())
 
 
-@pytest.mark.parametrize("gateway", [10], indirect=True)
+@pytest.mark.parametrize("gateway", [GatewaySettings(max_media_bytes=10)], indirect=True)
 def test_oversized_media_exposes_caption_and_filename_without_download(
     gateway: LiveGateway,
     live_room: LiveRoom,
