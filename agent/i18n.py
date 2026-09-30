@@ -70,6 +70,8 @@ _catalog_cache: dict[tuple[str, str], dict[str, str]] = {}
 _bundled_cache: dict[tuple[str, int, int, int, int], dict[str, str]] = {}
 _supported_cache: dict[str, tuple[str, ...]] = {}
 _catalog_lock = threading.Lock()
+# Incremented by reset_language_cache. A fill stores its result only if no reset ran while it was building.
+_cache_generation = 0
 
 _language_cache: dict[str, str | None] = {}
 _LANGUAGE_CACHE_MAX = 8
@@ -104,13 +106,15 @@ def supported_languages(home: str | None = None) -> tuple[str, ...]:
     packs, ``en`` first then sorted. Cached until :func:`reset_language_cache`."""
     home = home or _current_home()
     with _catalog_lock:
+        generation = _cache_generation
         cached = _supported_cache.get(home)
         if cached is not None:
             return cached
     langs = set(SUPPORTED_LANGUAGES) | i18n_layers.layered_languages(home)
     result = (DEFAULT_LANGUAGE, *sorted(langs - {DEFAULT_LANGUAGE}))
     with _catalog_lock:
-        _supported_cache[home] = result
+        if generation == _cache_generation:
+            _supported_cache[home] = result
     return result
 
 
@@ -168,6 +172,7 @@ def _load_catalog(lang: str, home: str | None = None) -> dict[str, str]:
     home = home or _current_home()
     key = (home, lang)
     with _catalog_lock:
+        generation = _cache_generation
         cached = _catalog_cache.get(key)
         if cached is not None:
             return cached
@@ -175,7 +180,8 @@ def _load_catalog(lang: str, home: str | None = None) -> dict[str, str]:
     merged.update(i18n_layers.overlay_layer(home, lang))
     merged.update(i18n_layers.pack_layer(lang))
     with _catalog_lock:
-        _catalog_cache[key] = merged
+        if generation == _cache_generation:
+            _catalog_cache[key] = merged
     return merged
 
 
@@ -232,11 +238,14 @@ def reset_language_cache() -> None:
     """Invalidate cached language resolution, merged catalogs and every layer view (call after
     ``save_config`` changes ``display.language``, after a pack registers/unregisters, or after editing
     an overlay file)."""
-    global _language_generation
+    global _cache_generation, _language_generation
+    # Clear the layer views first. A build that starts after the generation below changes must not
+    # find a layer view from before this reset.
+    i18n_layers.clear_cache()
     with _catalog_lock:
         _catalog_cache.clear()
         _supported_cache.clear()
-    i18n_layers.clear_cache()
+        _cache_generation += 1
     with _language_lock:
         _language_cache.clear()
         _language_generation += 1
