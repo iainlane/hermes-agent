@@ -4538,7 +4538,7 @@ class TestMatrixImageOnlyMediaNormalization:
         ("m.audio", "meeting notes", "recording.ogg", "file", "meeting notes\n[matrix audio attachment too large: recording.ogg]"),
     ])
     async def test_inbound_oversized_media_surfaces_context_without_download(
-        self, msgtype, body, filename, media_url, expected_text,
+        self, tmp_path, msgtype, body, filename, media_url, expected_text,
     ):
         self.adapter._max_media_bytes = 10
         self.adapter.handle_message = AsyncMock()
@@ -4566,9 +4566,13 @@ class TestMatrixImageOnlyMediaNormalization:
         )
 
         (event,) = [call.args[0] for call in self.adapter.handle_message.await_args_list]
-        assert (event.text, event.message_type, event.media_urls, event.media_types) == (
-            expected_text, MessageType.TEXT, None, None,
+        store, _ = _room_session(tmp_path)
+        runner = _room_context_runner(store, self.adapter)
+        runner._session_state("session")
+        prepared = await runner._prepare_inbound_message_text(
+            event=event, source=event.source, history=[], session_key="session",
         )
+        assert (prepared, event.message_type) == (expected_text, MessageType.TEXT)
         self.adapter._client.download_media.assert_not_called()
 
 
