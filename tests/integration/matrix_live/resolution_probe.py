@@ -13,6 +13,12 @@ from hermes_constants import get_hermes_home
 from plugins.platforms.matrix.reply_context import MatrixEventContext
 
 
+def _write_json(path, value):
+    partial = path.with_name(f".{path.name}.partial")
+    partial.write_text(json.dumps(value), encoding="utf-8")
+    partial.replace(path)
+
+
 def _observe(adapter, home):
     active = ContextVar("matrix_resolution_probe", default=False)
     cache = adapter._event_context_cache
@@ -31,17 +37,14 @@ def _observe(adapter, home):
         if (home / "resolution-started.json").exists():
             return
         store = client.crypto.crypto_store
-        (home / "resolution-started.json").write_text(
-            json.dumps({
-                "event_id": event_id,
-                "reaction_page": reaction_page,
-                "adapter_module": type(adapter).__module__,
-                "user_id": adapter._user_id,
-                "home": str(home),
-                "store_type": f"{type(store).__module__}.{type(store).__qualname__}",
-            }),
-            encoding="utf-8",
-        )
+        _write_json(home / "resolution-started.json", {
+            "event_id": event_id,
+            "reaction_page": reaction_page,
+            "adapter_module": type(adapter).__module__,
+            "user_id": adapter._user_id,
+            "home": str(home),
+            "store_type": f"{type(store).__module__}.{type(store).__qualname__}",
+        })
         async with asyncio.timeout(8):
             while not (home / "resolution-release").exists():
                 await asyncio.sleep(0.01)
@@ -82,13 +85,13 @@ def _observe(adapter, home):
                 from plugins.platforms.matrix.effective_event import event_content
 
                 store = client.crypto.crypto_store
-                (home / "resolution-decrypted.json").write_text(json.dumps({
+                _write_json(home / "resolution-decrypted.json", {
                     "event_id": str(event.event_id),
                     "relation": event_content(result).get("m.relates_to"),
                     "user_id": adapter._user_id,
                     "home": str(home),
                     "store_type": f"{type(store).__module__}.{type(store).__qualname__}",
-                }), encoding="utf-8")
+                })
         return result
 
     async def observed_session(*args, **kwargs):
@@ -97,14 +100,14 @@ def _observe(adapter, home):
             await pause(settings["replacement"])
         return await get_session(*args, **kwargs)
 
-    def scoped(operation, *, is_read):
+    def scoped(operation, *, is_read, clear=True):
         async def observed(*args, **kwargs):
             if not is_read and args[0] is not adapter:
                 return await operation(*args, **kwargs)
             settings = config()
             if not settings or (settings["scope"] == "event") != is_read:
                 return await operation(*args, **kwargs)
-            if not (home / "resolution-started.json").exists():
+            if clear and not (home / "resolution-started.json").exists():
                 cache._entries.clear()
                 cache.max_entries = 2
                 gc.collect()
@@ -121,6 +124,7 @@ def _observe(adapter, home):
     client.crypto.crypto_store.get_group_session = observed_session
     adapter.read_matrix_context = scoped(adapter.read_matrix_context, is_read=True)
     type(adapter).fetch_inbound_context = scoped(type(adapter).fetch_inbound_context, is_read=False)
+    type(adapter).prepare_turn_context = scoped(type(adapter).prepare_turn_context, is_read=False, clear=False)
 
 
 def register(ctx):
@@ -136,11 +140,15 @@ def register(ctx):
         message = adapter._on_room_message
 
         async def observed_message(event):
+            config = home / "resolution-config.json"
+            if config.exists() and json.loads(config.read_text(encoding="utf-8"))["scope"] != "event":
+                # Catch-up and thread history run only where the gate requires a mention.
+                adapter._free_rooms.discard(str(event.room_id))
             await message(event)
             path = home / "resolution-observed-events.json"
             seen = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
             seen.append(str(event.event_id))
-            path.write_text(json.dumps(seen), encoding="utf-8")
+            _write_json(path, seen)
 
         async def observed_redact(event):
             await redact(event)
@@ -159,15 +167,12 @@ def register(ctx):
                         MatrixEventContext("", "unrelated"),
                     )
                 gc.collect()
-            (home / "resolution-redaction.json").write_text(
-                json.dumps({
-                    "event_id": str(event.redacts),
-                    "room_id": str(event.room_id),
-                    "entries": len(cache._entries),
-                    "limit": cache.max_entries,
-                }),
-                encoding="utf-8",
-            )
+            _write_json(home / "resolution-redaction.json", {
+                "event_id": str(event.redacts),
+                "room_id": str(event.room_id),
+                "entries": len(cache._entries),
+                "limit": cache.max_entries,
+            })
 
         async def observed_connect(*connect_args, **connect_kwargs):
             result = await connect(*connect_args, **connect_kwargs)
