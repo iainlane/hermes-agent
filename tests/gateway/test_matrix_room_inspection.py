@@ -507,6 +507,7 @@ async def test_inspection_rechecks_owning_client_and_policy_after_await(
             tokens = set_session_vars(
                 platform="matrix", chat_id=room, user_id=user, profile=home.name,
                 session_key=f"matrix-{home.name}", transport_adapter=adapter,
+                transport_loop=asyncio.get_running_loop(),
             )
             try:
                 return json.loads(await _matrix_read({"kind": kind}))
