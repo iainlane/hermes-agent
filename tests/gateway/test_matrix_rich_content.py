@@ -17,6 +17,7 @@ from gateway.platforms.base import merge_pending_message_event
 from gateway.platforms.event import MessageType
 from gateway.run import GatewayRunner
 from gateway.run_turn_runner import TurnRunner
+from gateway.session import SessionStore
 from gateway.turn_context import TurnContext
 from plugins.platforms.matrix.adapter import MatrixAdapter
 from plugins.platforms.matrix.read_context import read_matrix_context
@@ -55,6 +56,7 @@ def _adapter(monkeypatch: pytest.MonkeyPatch) -> tuple[MatrixAdapter, AsyncMock]
             room_topic=None,
             server_name="example.org",
             members_digest=None,
+            room_state=None,
         )
     )
     adapter._get_display_name = AsyncMock(return_value="Alice")
@@ -108,6 +110,14 @@ def _body(kind: str, sender: str = SENDER) -> str:
     )
 
 
+def _runner(adapter: MatrixAdapter, tmp_path: Path) -> GatewayRunner:
+    runner = object.__new__(GatewayRunner)
+    runner.config = GatewayConfig()
+    runner.session_store = SessionStore(tmp_path / "sessions", runner.config)
+    runner.adapters = {Platform.MATRIX: adapter}
+    return runner
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "kind,scenario",
@@ -143,7 +153,7 @@ def _body(kind: str, sender: str = SENDER) -> str:
     ],
 )
 async def test_native_content_reaches_model_with_actor_description_and_pixels(
-    monkeypatch, kind, scenario
+    monkeypatch, tmp_path, kind, scenario
 ):
     adapter, received = _adapter(monkeypatch)
     raw = _event(kind)
@@ -253,9 +263,7 @@ async def test_native_content_reaches_model_with_actor_description_and_pixels(
         "thread": "$root",
         "id": "$native",
     }
-    runner = object.__new__(GatewayRunner)
-    runner.config = GatewayConfig()
-    runner.adapters = {Platform.MATRIX: adapter}
+    runner = _runner(adapter, tmp_path)
     monkeypatch.setattr(runner, "_decide_image_input_mode", lambda **_kwargs: "native")
     if scenario.startswith("analysis"):
         monkeypatch.setattr(
@@ -415,6 +423,7 @@ async def test_native_content_has_consistent_effective_reads_history_and_reply_p
         assert read == {
             "events": [],
             "errors": [{"event_id": "$native", "error": "missing decryption keys"}],
+            "skipped": 0,
         }
         parsed = await history_entry(
             adapter._client, raw, adapter._event_context_cache, ROOM,
@@ -438,6 +447,7 @@ async def test_native_content_has_consistent_effective_reads_history_and_reply_p
             }
         ],
         "errors": [],
+        "skipped": 0,
     }
     parsed = await history_entry(
         adapter._client, raw, adapter._event_context_cache, ROOM,
@@ -458,12 +468,12 @@ async def test_native_content_has_consistent_effective_reads_history_and_reply_p
         {"m.in_reply_to": {"event_id": "$native"}},
     )
     assert reply is not None
-    snapshot = await adapter.fetch_inbound_context(reply, include_thread_history=False)
+    snapshot = await adapter.fetch_inbound_context(reply)
     if scenario == "withdrawn":
         await adapter._on_redaction(SimpleNamespace(room_id=ROOM, redacts="$native"))
     await snapshot.refresh()
     assert snapshot.reply_event(reply).reply_to_text == (
-        None if scenario == "withdrawn" else body
+        "[redacted]" if scenario == "withdrawn" else body
     )
     assert bool(snapshot.reply_image_paths()) is (
         kind == "sticker" and scenario not in {"withdrawn", "oversize"}
@@ -488,7 +498,7 @@ async def test_native_content_has_consistent_effective_reads_history_and_reply_p
 @pytest.mark.parametrize("withdrawn", [0, 1])
 @pytest.mark.parametrize("mode", ["native", "text"])
 async def test_coalesced_native_content_revalidates_each_authored_event(
-    monkeypatch, method, kinds, withdrawn, mode
+    monkeypatch, tmp_path, method, kinds, withdrawn, mode
 ):
     adapter, received = _adapter(monkeypatch)
     duplicate = method.endswith("-duplicate")
@@ -536,9 +546,7 @@ async def test_coalesced_native_content_revalidates_each_authored_event(
             )
         event = pending["session"]
     all_paths = [path for paths in expected_paths for path in paths]
-    runner = object.__new__(GatewayRunner)
-    runner.config = GatewayConfig()
-    runner.adapters = {Platform.MATRIX: adapter}
+    runner = _runner(adapter, tmp_path)
     monkeypatch.setattr(runner, "_decide_image_input_mode", lambda **_kwargs: mode)
 
     async def withdraw():
@@ -601,7 +609,7 @@ async def test_unchanged_effective_read_preserves_mention_stripped_native_input(
 
     adapter._client.api.request.side_effect = request
     await read_matrix_context(adapter, "event", ROOM, "$native", 1, requester=SENDER)
-    snapshot = await adapter.fetch_inbound_context(event, include_thread_history=False)
+    snapshot = await adapter.fetch_inbound_context(event)
     await snapshot.refresh()
     assert {
         "text": snapshot.prepend_history(event.text),
