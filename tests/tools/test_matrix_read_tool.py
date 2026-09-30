@@ -46,7 +46,7 @@ async def test_matrix_read_uses_session_owner_and_room():
 @pytest.mark.asyncio
 async def test_matrix_room_inspection_uses_session_owner():
     adapter = SimpleNamespace(
-        read_matrix_context=AsyncMock(return_value={"events": []}),
+        read_matrix_context=AsyncMock(),
         inspect_matrix_room=AsyncMock(return_value={"room_id": "!room:server", "name": "Planning"}),
     )
     tokens = _bind_matrix_session(adapter)

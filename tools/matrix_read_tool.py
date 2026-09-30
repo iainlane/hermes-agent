@@ -41,11 +41,11 @@ async def _matrix_read(args: dict[str, Any]) -> str:
 
     if owner_loop is None or not owner_loop.is_running():
         return json.dumps({"error": "Matrix gateway loop is unavailable"})
-    read = (
-        adapter.inspect_matrix_room(kind, room_id, limit, requester=requester)
-        if kind in inspection_kinds
-        else read_context(kind, room_id, event_id, limit, requester=requester)
-    )
+
+    if kind in inspection_kinds:
+        read = adapter.inspect_matrix_room(kind, room_id, limit, requester=requester)
+    else:
+        read = read_context(kind, room_id, event_id, limit, requester=requester)
     future = safe_schedule_threadsafe(
         read, owner_loop,
         logger=logger, log_message="matrix_read: failed to schedule on the gateway loop",
@@ -67,10 +67,11 @@ registry.register(
         "name": "matrix_read",
         "description": (
             "Read messages, events, state, joined members, permissions, or pins in the current Matrix room. "
-            "Events are listed oldest first: a room read returns the latest messages, and a thread "
-            "read returns the thread root followed by its latest replies. `skipped` counts events in "
-            "the read window that have no readable message body, such as redacted messages. "
-            "`errors` lists events that could not be decrypted."
+            "Room and thread reads list events oldest first: a room read returns the latest messages, "
+            "and a thread read returns the thread root followed by its latest replies. Pins follow the "
+            "room's pinned order. `skipped` counts events in the read window that have no readable "
+            "message body, such as redacted messages. `errors` lists events that could not be read "
+            "or decrypted, with the reason."
         ),
         "parameters": {
             "type": "object",
@@ -78,7 +79,7 @@ registry.register(
                 "kind": {"type": "string", "enum": ["room", "thread", "event", "state", "members", "permissions", "pins"]},
                 "event_id": {"type": "string", "description": "Event ID for an event read, or thread root. A thread read defaults to the current thread."},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20,
-                          "description": "Maximum number of events, members or pins to read. A thread read counts the root."},
+                          "description": "Maximum number of events or members to return. A thread read counts the root."},
             },
             "required": ["kind"],
         },

@@ -385,7 +385,10 @@ def gateway(
     home = tmp_path / "hermes"
     home.mkdir()
     route = _host_route(network)
-    with FakeLLMServer([Text(settings.reply)], bind_host=route.bind_host) as model:
+    script = [] if mode == "inspection" else [Text(settings.reply)]
+    with FakeLLMServer(
+        script, bind_host=route.bind_host, default_text=settings.reply if mode == "inspection" else "ok",
+    ) as model:
         write_hermes_home(
             home,
             f"http://host.docker.internal:{model.port}/v1",
@@ -397,6 +400,8 @@ def gateway(
                 + "updates:\n  check: false\n"
                 + ("auxiliary:\n  background_review:\n    enabled: false\n  title_generation:\n    model_upgrade_enabled: false\n"
                    if mode == "pause-image-context" else "")
+                + ("auxiliary:\n  title_generation:\n    model_upgrade_enabled: false\n"
+                   if mode == "inspection" else "")
                 + ("display:\n  busy_input_mode: queue\n  busy_ack_enabled: false\n"
                    if mode == "pause-queued-context" else "")
                 + ("plugins:\n  enabled:\n    - matrix-live-context\n"
