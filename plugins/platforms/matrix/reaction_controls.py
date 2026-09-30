@@ -26,8 +26,15 @@ class _MatrixPickerPrompt:
     requester_user_id: str | None = None
     expires_at: float | None = None
     resolved: bool = False
+    metadata: dict = field(default_factory=dict)
     bot_reaction_events: dict[str, str] = field(default_factory=dict)
     is_menu: bool = False
+
+    @property
+    def notice_metadata(self) -> dict[str, str] | None:
+        """Send metadata that keeps a notice about this card in the card's thread."""
+        thread_id = str(self.metadata.get("thread_id") or "")
+        return {"thread_id": thread_id} if thread_id else None
 
 
 class MatrixReactionControlMixin:
@@ -51,7 +58,7 @@ class MatrixReactionControlMixin:
             lambda message_id, requester, expires_at: _MatrixPickerPrompt(
                 chat_id=chat_id, message_id=message_id, session_key=session_key, choices=choices,
                 on_selected=on_selected, requester_user_id=requester,
-                expires_at=time.monotonic() + MENU_TIMEOUT_SECONDS if is_menu else expires_at, is_menu=is_menu),
+                expires_at=time.monotonic() + MENU_TIMEOUT_SECONDS if is_menu else expires_at, is_menu=is_menu, metadata=dict(metadata or {})),
             registry, choices, label)
 
     async def _claim_reaction_prompt(
@@ -72,7 +79,7 @@ class MatrixReactionControlMixin:
             return True, prompt, None
         selection = (prompt.choices if choices is None else choices).get(key)
         if selection is None:
-            await self._send_invalid_reaction_feedback(room_id, reacts_to, invalid_text)
+            await self._send_invalid_reaction_feedback(room_id, reacts_to, invalid_text, prompt.notice_metadata)
         return True, prompt, selection
 
     async def _handle_model_picker_reaction(self, room_id: str, reacts_to: str, key: str, sender: str) -> bool:
@@ -113,11 +120,11 @@ class MatrixReactionControlMixin:
             if redact_bot_reactions:
                 await self._redact_bot_model_picker_reactions(room_id, prompt)
             if confirmation:
-                await self.send(room_id, confirmation, reply_to=reacts_to, metadata={"_notice_reply": True})
+                await self.send(room_id, confirmation, reply_to=reacts_to, metadata={**(prompt.notice_metadata or {}), "_notice_reply": True})
         except Exception as exc:
             logger.error("Failed to %s from Matrix reaction: %s", verbs[0], exc)
             await self.send(room_id, t("platform.matrix.picker.failed", action=t(verbs[1]), error=str(exc)),
-                            reply_to=reacts_to, metadata={"_notice_reply": True})
+                            reply_to=reacts_to, metadata={**(prompt.notice_metadata or {}), "_notice_reply": True})
         return True
 
     async def _validate_matrix_prompt_reactor(
@@ -129,14 +136,14 @@ class MatrixReactionControlMixin:
             logger.info(
                 "Matrix: ignoring %s reaction from unauthorized user %s on %s", prompt_label, sender, target_event_id)
             await self._send_invalid_reaction_feedback(
-                room_id, target_event_id, t("platform.matrix.reaction.unauthorized"))
+                room_id, target_event_id, t("platform.matrix.reaction.unauthorized"), prompt.notice_metadata)
             return False
         requester = getattr(prompt, "requester_user_id", None)
         # getattr: object.__new__-built test doubles may lack the attribute.
         if (is_menu or getattr(self, "_approval_require_sender", True)) and requester and sender != requester:
             logger.info("Matrix: ignoring %s reaction from %s; requester is %s", prompt_label, sender, requester)
             await self._send_invalid_reaction_feedback(
-                room_id, target_event_id, t("platform.matrix.reaction.not_requester"))
+                room_id, target_event_id, t("platform.matrix.reaction.not_requester"), prompt.notice_metadata)
             return False
         return True
 
@@ -158,7 +165,7 @@ class MatrixReactionControlMixin:
         self._model_picker_prompts_by_event.pop(target_event_id, None)
         await self._redact_bot_model_picker_reactions(room_id, prompt)
         await self._send_invalid_reaction_feedback(
-            room_id, target_event_id, t("platform.shared.model_picker_expired"))
+            room_id, target_event_id, t("platform.shared.model_picker_expired"), prompt.notice_metadata)
 
     async def _redact_bot_model_picker_reactions(self, room_id: str, prompt: Any) -> None:
         from plugins.platforms.matrix.adapter import logger
