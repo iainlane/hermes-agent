@@ -18,7 +18,8 @@ OTHER = "agent:main:discord:dm:888"
 def _bare_runner() -> GatewayRunner:
     runner = object.__new__(GatewayRunner)
     for attr in _CONVERSATION_SCOPED_STATE:
-        setattr(runner, attr, {KEY: object(), OTHER: object()})
+        values = {key: [object()] if attr == "_queued_events" else object() for key in (KEY, OTHER)}
+        setattr(runner, attr, values)
     # Turn-scoped state that the funnel must NOT touch.
     runner._running_agents = {KEY: object()}
     runner._running_agents_ts = {KEY: 1.0}

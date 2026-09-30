@@ -52,9 +52,10 @@ class GatewayQueuedFollowupMixin:
     ) -> Any:
         """Run the queued / interrupting follow-up as the next turn (recursive ``_run_agent``).
 
-        A leftover steer that the drain handed to this follow-up has no other completion: its own
-        handler skipped it, and the running turn no longer lists it. Every exit before the follow-up
-        starts therefore completes it here."""
+        A started message that waits for this follow-up (a queued message, or a leftover steer that
+        the drain handed to it) has no other completion: its own handler skipped it. Every exit
+        before the follow-up starts therefore completes it here, except at the recursion cap, where
+        the follow-up returns to the pending slot."""
         from gateway.run_turn_followup_ack import _followup_cancel_outcome
 
         try:
@@ -77,14 +78,9 @@ class GatewayQueuedFollowupMixin:
         return self._intake_adapter_for(source) if source is not None else None
 
     async def _complete_unstarted_followup(self: "GatewayRunner", pending_event: Any, outcome: ProcessingOutcome) -> None:
-        """Complete a handed-over follow-up, and the messages attached to it, that never started."""
-        from gateway.run_turn_followup_ack import _run_followup_processing_hook
-
-        state = getattr(pending_event, "_processing_state", None)
-        if state is None or not state.resume_absorbed():
-            return
-        await _run_followup_processing_hook(
-            self._followup_hook_adapter(pending_event), pending_event, "on_processing_complete", outcome)
+        """Complete a started follow-up, and the messages attached to it, that this lane took from
+        the queue but never started."""
+        await self._complete_discarded_event(pending_event, outcome)
 
     async def _run_agent_queued_followup_turn(
         self: "GatewayRunner", turn_ctx: TurnContext, adapter: Any, pending: Optional[str], pending_event: Any,
@@ -315,6 +311,7 @@ class GatewayQueuedFollowupMixin:
                 raise
             followup_outcome = _turn_result_outcome(followup_result)
             if (completed_event is not None and _hook_adapter is not None
+                    and (completed_event.message_id or completed_event.raw_message)
                     and _followup_processing_hooks_apply(_hook_adapter, pending_event)
                     and followup_outcome == ProcessingOutcome.SUCCESS and not followup_result.get("already_sent")):
                 completed_event._processing_state.pending_completion = _ProcessingCompletion(_hook_adapter, pending_event)
