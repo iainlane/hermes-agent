@@ -8,8 +8,9 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 from urllib.parse import quote
 
+from plugins.platforms.matrix.client_events import Method, raw_event
 from plugins.platforms.matrix.read_context import (
-    MatrixReadEvent, Method, _current_read_access, _read_access, _raw_event, _visible_event,
+    MatrixReadEvent, _current_read_access, _read_access, _visible_event,
 )
 from plugins.platforms.matrix.reply_context import MatrixEventContext, MatrixEventContextCache
 
@@ -269,7 +270,7 @@ async def _pinned_event(context: _InspectionContext, event_id: str) -> MatrixRea
             f"/_matrix/client/v3/rooms/{quote(context.room_id, safe='')}"
             f"/event/{quote(event_id, safe='')}"
         )
-        raw = _raw_event(await asyncio.wait_for(context.client.api.request(Method.GET, path), timeout=10.0))
+        raw = raw_event(await asyncio.wait_for(context.client.api.request(Method.GET, path), timeout=10.0))
         context.dependencies.update(cache.retain_events(context.room_id, [raw]))
         await context.check_access()
     except _InspectionRejected:
