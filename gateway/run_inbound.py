@@ -1289,12 +1289,6 @@ class GatewayInboundMixin(GatewayInboundContextMixin, GatewayInboundAdmissionMix
             # One-shot restore (/moa, /model --once) must run on EVERY exit path (success,
             # exception, interrupt); the generation guard makes a displaced turn's finalizer a no-op.
             self._restore_pending_one_turn_model_override(_quick_key, _run_generation)
-            # SIGKILL/OOM skips finally, leaving the durable marker for the next unclean startup's
-            # recovery pass. A turn the adapter delivers hands its marker to that lifecycle, which
-            # clears it only once the reply is in the delivery ledger (else a kill in between
-            # left neither marker nor ledger row and the persisted reply was never sent).
-            if not getattr(event, "_turn_marker_handoff", False):
-                await self._clear_durable_active_turn(event)
             # Release only this turn's generation. Eviction may immediately admit a replacement
             # through the cold path; an unconditional release here would then clear the replacement
             # sentinel/agent and lease. Reset/stop release their stale slot before installing a
@@ -1303,6 +1297,9 @@ class GatewayInboundMixin(GatewayInboundContextMixin, GatewayInboundAdmissionMix
             # Turn lease is keyed by (routing key, run generation) so this unwind can only free
             # the lease its own turn acquired, never a newer turn's.
             self._release_turn_lease(_quick_key, _run_generation)
+            # Adapter-owned markers remain until the final reply is durably recorded.
+            if not getattr(event, "_turn_marker_handoff", False):
+                await self._clear_durable_active_turn(event)
             # Last: the completion awaits the platform, and a second cancellation there must not
             # skip the releases above.
             if _rescued_event is not None:
