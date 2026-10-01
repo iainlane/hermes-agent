@@ -457,6 +457,11 @@ def gateway_extra_config() -> str:
 
 
 @pytest.fixture
+def model_responder() -> Callable[[dict], Text] | None:
+    return None
+
+
+@pytest.fixture
 def gateway_auxiliary_config() -> str:
     return ""
 
@@ -479,6 +484,7 @@ def gateway(
     gateway_config: str,
     gateway_home_setup: Callable[[Path], None],
     gateway_auxiliary_config: str,
+    model_responder: Callable[[dict], Text] | None,
 ) -> Iterator[LiveGateway]:
     param = getattr(request, "param", GatewaySettings())
     settings = GatewaySettings(mode=param) if isinstance(param, str) else param
@@ -490,7 +496,9 @@ def gateway(
     native_images = mode in {"pause-image-context", "pause-image-conversion", "image-packs"}
     home = gateway_home
     route = _host_route(network)
-    script = [] if mode == "inspection" else [Text(settings.reply)]
+    script = model_responder
+    if script is None:
+        script = [] if mode == "inspection" else [Text(settings.reply)]
     with FakeLLMServer(
         script, bind_host=route.bind_host, default_text=settings.reply if mode == "inspection" else "ok",
     ) as model:
