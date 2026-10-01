@@ -18,4 +18,8 @@ async def test_checkpoint_encoding_preserves_cursor_and_accepted_intakes(tmp_pat
 
     await store.load()
 
-    assert await store.get_next_batch() == "cursor"
+    assert (
+        await store.get_next_batch(),
+        store.intake_accepted("$accepted"),
+        store.reserve_intake("$accepted"),
+    ) == ("cursor", True, False)
