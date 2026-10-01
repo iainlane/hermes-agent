@@ -118,7 +118,8 @@ class LinuxNioObserver:
 
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_makereport(
-    item: pytest.Item, call: pytest.CallInfo[None],
+    item: pytest.Item,
+    call: pytest.CallInfo[None],
 ) -> Generator[None, pytest.TestReport, pytest.TestReport]:
     report = yield
     gateway = getattr(item, "funcargs", {}).get("gateway")
@@ -128,7 +129,10 @@ def pytest_runtest_makereport(
 
 
 def _wait_for(
-    predicate: Callable[[], bool], description: str, *, timeout: float = 60.0,
+    predicate: Callable[[], bool],
+    description: str,
+    *,
+    timeout: float = 60.0,
     details: Callable[[], str] | None = None,
 ) -> None:
     deadline = time.monotonic() + timeout
@@ -159,7 +163,9 @@ def _docker_connection_scope(docker_config: Path) -> Iterator[None]:
             environment.setenv("DOCKER_CONFIG", str(docker_config))
             if facts.os_family() == "darwin":
                 # The daemon resolves Ryuk's socket mount inside its Linux VM, where the socket is /var/run/docker.sock.
-                environment.setenv("TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE", "/var/run/docker.sock")
+                environment.setenv(
+                    "TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE", "/var/run/docker.sock"
+                )
             environment.setattr(testcontainers_config, "ryuk_disabled", False)
             environment.setattr(testcontainers_config, "ryuk_image", RYUK_IMAGE)
             client = docker.from_env()
@@ -188,9 +194,18 @@ def _selected_docker_host() -> str:
 def _write_isolated_docker_config(destination: Path) -> None:
     source = Path(os.environ.get("DOCKER_CONFIG") or Path.home() / ".docker")
     source_file = source / "config.json"
-    settings = json.loads(source_file.read_text(encoding="utf-8")) if source_file.is_file() else {}
-    plugin_dirs = [str(source / "cli-plugins"), *settings.get("cliPluginsExtraDirs", [])]
-    (destination / "config.json").write_text(json.dumps({"cliPluginsExtraDirs": plugin_dirs}), encoding="utf-8")
+    settings = (
+        json.loads(source_file.read_text(encoding="utf-8"))
+        if source_file.is_file()
+        else {}
+    )
+    plugin_dirs = [
+        str(source / "cli-plugins"),
+        *settings.get("cliPluginsExtraDirs", []),
+    ]
+    (destination / "config.json").write_text(
+        json.dumps({"cliPluginsExtraDirs": plugin_dirs}), encoding="utf-8"
+    )
 
 
 class _ImageStore(Protocol):
@@ -200,12 +215,17 @@ class _ImageStore(Protocol):
 
 
 @contextmanager
-def _gateway_image_tag(images: _ImageStore, prebuilt: str | None, build: Callable[[str], None]) -> Iterator[str]:
+def _gateway_image_tag(
+    images: _ImageStore, prebuilt: str | None, build: Callable[[str], None]
+) -> Iterator[str]:
     if prebuilt:
         try:
             images.get(prebuilt)
         except docker_errors.ImageNotFound:
-            pytest.fail(f"{PREBUILT_IMAGE_VARIABLE}={prebuilt} is not loaded in the Docker daemon", pytrace=False)
+            pytest.fail(
+                f"{PREBUILT_IMAGE_VARIABLE}={prebuilt} is not loaded in the Docker daemon",
+                pytrace=False,
+            )
         yield prebuilt
         return
 
@@ -221,8 +241,14 @@ def _gateway_image_tag(images: _ImageStore, prebuilt: str | None, build: Callabl
 
 
 def _build_gateway_image(tag: str) -> None:
-    result = subprocess.run(build_command(tag, {LABEL_SESSION_ID: SESSION_ID}), capture_output=True, text=True)
-    assert result.returncode == 0, f"Linux gateway image build failed:\n{result.stdout[-6000:]}\n{result.stderr[-6000:]}"
+    result = subprocess.run(
+        build_command(tag, {LABEL_SESSION_ID: SESSION_ID}),
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"Linux gateway image build failed:\n{result.stdout[-6000:]}\n{result.stderr[-6000:]}"
+    )
 
 
 @pytest.fixture(scope="module")
@@ -231,7 +257,9 @@ def gateway_image(docker_engine: None) -> Iterator[str]:
     Reaper.get_instance()
     client = docker.from_env()
     try:
-        with _gateway_image_tag(client.images, os.environ.get(PREBUILT_IMAGE_VARIABLE), _build_gateway_image) as image:
+        with _gateway_image_tag(
+            client.images, os.environ.get(PREBUILT_IMAGE_VARIABLE), _build_gateway_image
+        ) as image:
             yield image
     finally:
         client.close()
@@ -247,11 +275,16 @@ def synapse(docker_engine: None) -> Iterator[tuple[DockerContainer, str, Network
         labels={LABEL_SESSION_ID: SESSION_ID},
     )
     try:
-        with DockerContainer(SYNAPSE_IMAGE, command="generate").with_env(
-            "SYNAPSE_SERVER_NAME", "matrix.test"
-        ).with_env("SYNAPSE_REPORT_STATS", "no").with_volume_mapping(volume.name, "/data", "rw") as generator:
+        with (
+            DockerContainer(SYNAPSE_IMAGE, command="generate")
+            .with_env("SYNAPSE_SERVER_NAME", "matrix.test")
+            .with_env("SYNAPSE_REPORT_STATS", "no")
+            .with_volume_mapping(volume.name, "/data", "rw") as generator
+        ):
             exit_state = generator.get_wrapped_container().wait(timeout=90)
-            assert exit_state["StatusCode"] == 0, generator.get_wrapped_container().logs().decode(errors="replace")
+            assert exit_state["StatusCode"] == 0, (
+                generator.get_wrapped_container().logs().decode(errors="replace")
+            )
 
         with DockerContainer(
             SYNAPSE_IMAGE,
@@ -264,14 +297,20 @@ def synapse(docker_engine: None) -> Iterator[tuple[DockerContainer, str, Network
             assert exit_state["StatusCode"] == 0, configure.get_wrapped_container().logs().decode(errors="replace")
 
         with Network() as network:
-            with DockerContainer(SYNAPSE_IMAGE, network=network, network_aliases=["synapse"]).with_volume_mapping(
-                volume.name, "/data", "rw"
-            ).with_exposed_ports(8008) as container:
+            with (
+                DockerContainer(
+                    SYNAPSE_IMAGE, network=network, network_aliases=["synapse"]
+                )
+                .with_volume_mapping(volume.name, "/data", "rw")
+                .with_exposed_ports(8008) as container
+            ):
                 url = f"http://{container.get_container_host_ip()}:{container.get_exposed_port(8008)}"
 
                 def ready() -> bool:
                     try:
-                        with urllib.request.urlopen(f"{url}/_matrix/client/versions", timeout=2) as response:
+                        with urllib.request.urlopen(
+                            f"{url}/_matrix/client/versions", timeout=2
+                        ) as response:
                             return response.status == 200
                     except OSError:
                         return False
@@ -288,7 +327,9 @@ async def _register(url: str, localpart: str) -> MatrixAccount:
         request_timeout=15, max_limit_exceeded=0, max_timeouts=0,
     ))
     try:
-        registration = await client.register(localpart, "matrix-test-password", device_name=f"{localpart}-device")
+        registration = await client.register(
+            localpart, "matrix-test-password", device_name=f"{localpart}-device"
+        )
         assert isinstance(registration, RegisterResponse), registration
         login = await client.login("matrix-test-password")
         assert isinstance(login, LoginResponse), login
@@ -368,8 +409,10 @@ def _host_route(network: Network) -> HostRoute:
     finally:
         client.close()
     gateway = next(
-        config["Gateway"] for config in configs
-        if config.get("Gateway") and ipaddress.ip_address(config["Gateway"]).version == 4
+        config["Gateway"]
+        for config in configs
+        if config.get("Gateway")
+        and ipaddress.ip_address(config["Gateway"]).version == 4
     )
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
@@ -617,7 +660,9 @@ def gateway(
             REPO_ROOT / "tests/integration/matrix_live", "/matrix_live", "ro"
         ).with_env("HOME", "/opt/data") as container:
             def connected() -> bool:
-                output = container.get_wrapped_container().logs().decode(errors="replace")
+                output = (
+                    container.get_wrapped_container().logs().decode(errors="replace")
+                )
                 gateway_log = home / "logs" / "gateway.log"
                 if gateway_log.exists():
                     log = gateway_log.read_text(errors="replace")
@@ -629,8 +674,15 @@ def gateway(
                 return False
 
             _wait_for(
-                connected, "Matrix gateway start-up", timeout=120,
-                details=lambda: container.get_wrapped_container().logs().decode(errors="replace")[-6000:],
+                connected,
+                "Matrix gateway start-up",
+                timeout=120,
+                details=lambda: (
+                    container
+                    .get_wrapped_container()
+                    .logs()
+                    .decode(errors="replace")[-6000:]
+                ),
             )
             yield LiveGateway(container, model, home)
 
