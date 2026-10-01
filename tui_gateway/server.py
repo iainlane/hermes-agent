@@ -22,7 +22,8 @@ from typing import TYPE_CHECKING, Any, Callable, NamedTuple, Optional  # noqa: F
 
 if TYPE_CHECKING:
     from .rpc_dispatch import handle_request
-    from .session_lifecycle import _start_turn_thread
+    from .session_lifecycle import _claim_session_turn, _owns_turn_claim, _start_turn_thread
+
 
 # Several of these look unused here but are resolved BARE by split-module bodies rebound onto this
 # namespace (method_ctx.bind_module) — deleting one breaks a handler at call time, not import time.

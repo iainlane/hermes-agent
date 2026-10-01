@@ -11,7 +11,10 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import threading
 
-    from .session_lifecycle import _decide_submit_thread
+    from .server import _err
+    from .session_workdir import _write_submit_user_row
+    from .session_lifecycle import _claim_session_turn, _decide_submit_thread, _owns_turn_claim, _session_turn_admission, _start_turn_thread
+
 
 from .method_ctx import HandlerRegistry, bind_module
 
