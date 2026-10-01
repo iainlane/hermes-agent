@@ -370,7 +370,7 @@ class GatewayInboundContextMixin:
         model supports native vision; the caller consumes that buffer at ``run_conversation``."""
         rehome_inbound_media(event)  # before any consumer (vision, STT, document notes) reads media_urls
         _pending_stt_prepared = hasattr(event, "_gateway_pending_stt_text")
-        message_text = (event._gateway_pending_stt_text if _pending_stt_prepared else event.text) or ""
+        message_text: str = getattr(event, "_gateway_pending_stt_text", event.text) or ""
         # Prefer the caller's resolved session key so this write key matches the consume key at the
         # run_conversation site; derive it here only for tests and legacy standalone callers.
         session_key = session_key or self._session_key_for_source(source)
@@ -378,9 +378,10 @@ class GatewayInboundContextMixin:
         self._consume_pending_native_image_paths(session_key)
 
         if "@" in message_text:
-            message_text = await self._expand_inbound_context_references(source, session_key, message_text)
-            if message_text is None:
+            expanded_message_text = await self._expand_inbound_context_references(source, session_key, message_text)
+            if expanded_message_text is None:
                 return None
+            message_text = expanded_message_text
 
         adapter = self._intake_adapter_for(source)
         context_snapshot = None
