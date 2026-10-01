@@ -46,6 +46,7 @@ def _make_runner(session_entry: SessionEntry, *, platform: Platform = Platform.T
         platforms={platform: PlatformConfig(enabled=True, token="***")}
     )
     adapter = MagicMock()
+    adapter._pending_dispatch_reservations = {}
     adapter.send = AsyncMock()
     runner.adapters = {platform: adapter}
     runner._voice_mode = {}
