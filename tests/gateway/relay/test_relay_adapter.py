@@ -47,10 +47,6 @@ def test_len_fn_utf16_counts_code_units():
     assert a.message_len_fn("\U0001f600") == 2
 
 
-
-
-
-
 class _CaptureTransport:
     """Minimal RelayTransport stand-in that records the outbound action."""
 
