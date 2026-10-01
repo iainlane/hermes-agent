@@ -14,6 +14,9 @@ const DESKTOP_HIDDEN_TOOLSETS = new Set([
   'discord',
   'discord_admin',
   'matrix_admin',
+  'matrix_read',
+  'matrix_unread',
+  'matrix_image_packs',
   'yuanbao',
   // Internal plumbing, not a user capability toggle.
   'context_engine',
