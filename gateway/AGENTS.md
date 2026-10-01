@@ -265,3 +265,5 @@ formatted HTML helpers are defined in `plugins/platforms/matrix/rendering.py`.
 Matrix connection, sync checkpoints and disconnect cleanup are defined in
 `plugins/platforms/matrix/intake_mixin.py`.
 Restart-safe cron delivery draining is defined in `run_delivery_queue_watch.py`.
+
+Cron and housekeeping thread startup is defined in `run_startup.py::_start_gateway_start_cron_and_housekeeping`.
