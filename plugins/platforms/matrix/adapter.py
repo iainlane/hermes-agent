@@ -1372,22 +1372,23 @@ class MatrixAdapter(MatrixMediaUploadMixin, MatrixSendRetryMixin, MatrixThreadCr
                     event_ids.append(last_event_id)
                     logger.info("Matrix: sent event %s to %s (after key share)", last_event_id, chat_id)
                 except Exception as retry_exc:
-                    logger.error("Matrix: failed to send to %s after retry: %s", chat_id, retry_exc)
-                    return SendResult(success=False, error=f"Matrix target '{target}': {retry_exc}")
-        return SendResult(success=True, message_id=last_event_id,
-                          continuation_message_ids=tuple(event_ids[:-1]))
+                    logger.error(
+                        "Matrix: failed to send to %s after retry: %s",
+                        chat_id,
+                        retry_exc,
+                    )
+                    return SendResult(
+                        success=False, error=f"Matrix target '{target}': {retry_exc}"
+                    )
+        return SendResult(
+            success=True,
+            message_id=last_event_id,
+            continuation_message_ids=tuple(event_ids[:-1]),
+        )
 
-
-
-
-
-
-
-
-
-
-
-    async def create_handoff_thread(self, parent_chat_id: str, name: str) -> Optional[str]:
+    async def create_handoff_thread(
+        self, parent_chat_id: str, name: str
+    ) -> Optional[str]:
         """Post a seed message and return its ``event_id`` as the handoff ``thread_id``. Matrix has
         no create-thread API: a thread is the events whose ``m.relates_to``/``rel_type: m.thread``
         point at a root event (Slack-style), and ``_apply_relation_metadata`` already threads later
