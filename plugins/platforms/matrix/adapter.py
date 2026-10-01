@@ -133,6 +133,7 @@ from plugins.platforms.matrix.redaction_mixin import MatrixRedactionMixin
 from plugins.platforms.matrix.pending_replay import MatrixPendingReplayMixin
 from plugins.platforms.matrix.intake_mixin import MatrixIntakeMixin
 from plugins.platforms.matrix.adapter_media import MatrixMediaMixin
+from plugins.platforms.matrix.send_retry import MatrixSendRetryMixin
 from plugins.platforms.matrix.inbound_events import MatrixInboundEventMixin
 from plugins.platforms.matrix.edit_followups import MatrixEditFollowupsMixin, edit_followup_rooms
 from plugins.platforms.matrix.turn_context import MatrixTurnContextUpdate
@@ -736,7 +737,7 @@ from plugins.platforms.matrix.delivery import MatrixDeliveryMixin
 from plugins.platforms.matrix.feedback import MatrixFeedbackMixin
 
 
-class MatrixAdapter(MatrixThreadCreateMixin, MatrixApprovalMixin, MatrixReactionPromptMixin, MatrixRTCVoiceMixin, MatrixRTCOutboundMixin, MatrixEditFollowupsMixin, MatrixFeedbackMixin, MatrixDeliveryMixin, MatrixInboundEventMixin, MatrixMediaMixin, MatrixInvitesMixin, MatrixPendingReplayMixin, MatrixIntakeMixin, MatrixRedactionMixin, MatrixFollowupMixin, MatrixRichContentMixin, MatrixContextMixin, BasePlatformAdapter):
+class MatrixAdapter(MatrixSendRetryMixin, MatrixThreadCreateMixin, MatrixApprovalMixin, MatrixReactionPromptMixin, MatrixRTCVoiceMixin, MatrixRTCOutboundMixin, MatrixEditFollowupsMixin, MatrixFeedbackMixin, MatrixDeliveryMixin, MatrixInboundEventMixin, MatrixMediaMixin, MatrixInvitesMixin, MatrixPendingReplayMixin, MatrixIntakeMixin, MatrixRedactionMixin, MatrixFollowupMixin, MatrixRichContentMixin, MatrixContextMixin, BasePlatformAdapter):
     """Gateway adapter for Matrix (any homeserver)."""
 
     supports_code_blocks = True  # Matrix renders fenced code blocks (HTML/markdown)
@@ -1385,27 +1386,6 @@ class MatrixAdapter(MatrixThreadCreateMixin, MatrixApprovalMixin, MatrixReaction
 
 
 
-    async def _send_room_message(
-        self, chat_id: str, msg_content: Dict[str, Any], *, finalize: bool = True, notice: bool = False,
-        access: MatrixSessionAccess | None = None, before_request: Callable[[], None] | None = None,
-    ) -> str:
-        """Send one m.room.message event (45s cap) and return its event ID as str."""
-        if access is not None:
-            access.check()
-        client = access.client if access is not None else self._client
-        delivery = access.send_message(msg_content, before_request=before_request) if access is not None else client.send_message_event(
-            RoomID(chat_id), EventType.ROOM_MESSAGE, msg_content)
-        event_id = await asyncio.wait_for(delivery, timeout=45)
-        event_id = str(event_id)
-        sender = access.user_id if access is not None else self._user_id
-        self._event_context_cache.store(chat_id, event_id, MatrixEventContext(sender or "", msg_content["body"]))
-        self._thread_fallbacks.remember_sent(chat_id, msg_content, event_id, notice=notice)
-        self._remember_followup_delivery(chat_id, event_id, msg_content, finalize=finalize)
-        if access is not None:
-            access.check(event_id)
-        return event_id
-
-
     async def create_handoff_thread(self, parent_chat_id: str, name: str) -> Optional[str]:
         """Post a seed message and return its ``event_id`` as the handoff ``thread_id``. Matrix has
         no create-thread API: a thread is the events whose ``m.relates_to``/``rel_type: m.thread``
@@ -1947,22 +1927,9 @@ class MatrixAdapter(MatrixThreadCreateMixin, MatrixApprovalMixin, MatrixReaction
         if room_id:
             self._invalidate_room_identities(room_id)
 
-
-
-    async def _send_reaction(self, room_id: str, event_id: str, emoji: str) -> Optional[str]:
-        """Send an emoji reaction; returns the reaction event_id, or None on failure."""
-        if not self._client:
-            return None
-        content = {"m.relates_to": {"rel_type": "m.annotation", "event_id": event_id, "key": emoji}}
-        try:
-            resp_event_id = await self._client.send_message_event(RoomID(room_id), EventType.REACTION, content)
-            logger.debug("Matrix: sent reaction %s to %s", emoji, event_id)
-            return str(resp_event_id)
-        except Exception as exc:
-            logger.debug("Matrix: reaction send error: %s", exc)
-            return None
-
-    async def _redact_reaction(self, room_id: str, reaction_event_id: str, reason: str = "") -> bool:
+    async def _redact_reaction(
+        self, room_id: str, reaction_event_id: str, reason: str = ""
+    ) -> bool:
         return await self.redact_message(room_id, reaction_event_id, reason)
 
     async def add_reaction(
@@ -2220,10 +2187,6 @@ class MatrixAdapter(MatrixThreadCreateMixin, MatrixApprovalMixin, MatrixReaction
             getattr(logger, level)(err_msg, exc)
             return False
 
-    async def redact_message(self, room_id: str, event_id: str, reason: str = "") -> bool:
-        return await self._client_op(
-            lambda: self._client.redact(RoomID(room_id), EventID(event_id), reason=reason or None),
-            ("Matrix: redacted %s in %s", event_id, room_id), "Matrix: redact error: %s")
 
     async def create_room(
         self, name: str = "", topic: str = "", invite: Optional[list] = None, is_direct: bool = False,
