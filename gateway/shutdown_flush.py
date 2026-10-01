@@ -293,7 +293,7 @@ def _append_recovered_transcript(session_db, session_id: str, messages: list) ->
     return len(messages)
 
 
-def recover_pending_to_db(session_db=None, *, session_resolver=None) -> int:
+def recover_pending_to_db(session_db=None, *, session_resolver=None, project_pending: bool = True) -> int:
     """Replay shutdown spool files, deleting each only after its canonical write succeeds.
 
     Transcript envelopes are decoded and appended once per session, in their persisted ``(ts,
@@ -382,7 +382,8 @@ def recover_pending_to_db(session_db=None, *, session_resolver=None) -> int:
             try:
                 from gateway.shutdown_pending import PENDING_SCHEMA, project_pending_snapshot
                 if payload.get("schema") == PENDING_SCHEMA:
-                    recovered += project_pending_snapshot(path, payload, session_resolver=session_resolver)
+                    if project_pending:
+                        recovered += project_pending_snapshot(path, payload, session_resolver=session_resolver)
                     continue
                 inserted = _recover_one_payload(
                     session_db, path, payload, session_resolver=session_resolver)
