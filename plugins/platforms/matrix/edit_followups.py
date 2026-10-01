@@ -44,9 +44,10 @@ class MatrixEditFollowupsMixin:
     handle_message: Callable[[MessageEvent], Awaitable[None]]
 
     def _edit_policy_allows(
-        self, room_id: str, sender: str, event_id: str, target: str, chat_type: str,
+        self, room_id: str, sender: str, event_id: str, target: str, chat_type: str, *, notice: bool,
     ) -> bool:
-        return (room_id in self._process_edits
+        return ((not notice or self._process_notices)
+                and room_id in self._process_edits
                 and not self._event_context_cache.is_redacted(room_id, target)
                 and not self._event_context_cache.is_redacted(room_id, event_id)
                 and (not self._allowed_room_ids or room_id in self._allowed_room_ids or chat_type == "dm")
@@ -81,7 +82,10 @@ class MatrixEditFollowupsMixin:
         )
         queued = event.raw_message if isinstance(event.raw_message, dict) else {}
         return (ctx is not None
-                and self._edit_policy_allows(room_id, source.user_id, event.message_id, target, ctx[-1].chat_type)
+                and self._edit_policy_allows(
+                    room_id, source.user_id, event.message_id, target, ctx[-1].chat_type,
+                    notice=original.get("msgtype") == "m.notice" or content.get("msgtype") == "m.notice",
+                )
                 and content.get("body") == queued.get("body")
                 and ctx[-1].thread_id == source.thread_id)
 
@@ -192,6 +196,7 @@ class MatrixEditFollowupsMixin:
         original = await self._edit_original_content(room_id, sender, target)
         if original is None or (original.get("msgtype") == "m.notice" and not self._process_notices):
             return
+        notice = original.get("msgtype") == "m.notice" or msgtype == "m.notice"
         relation = original.get("m.relates_to")
         relation = relation if isinstance(relation, dict) else {}
         revised = {key: value for key, value in revised.items() if key != "m.relates_to"}
@@ -204,7 +209,7 @@ class MatrixEditFollowupsMixin:
         if ctx is None:
             return
         _body, _is_dm, chat_type, thread_id, _display_name, _requires_mention, source = ctx
-        if not self._edit_policy_allows(room_id, sender, event_id, target, chat_type):
+        if not self._edit_policy_allows(room_id, sender, event_id, target, chat_type, notice=notice):
             return
         source.message_id = event_id
         event = await self._build_inbound_event(
@@ -217,7 +222,7 @@ class MatrixEditFollowupsMixin:
             return
         if thread_id:
             await self._threads.mark_async(thread_id)
-        if not self._edit_policy_allows(room_id, sender, event_id, target, chat_type):
+        if not self._edit_policy_allows(room_id, sender, event_id, target, chat_type, notice=notice):
             return
         self._background_read_receipt(room_id, event_id)
         event._queue_at_turn_boundary = True
