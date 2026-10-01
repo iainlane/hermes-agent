@@ -160,6 +160,7 @@ plugins/platforms/                  # plugin-packaged adapters (one dir each)
 ├── matrix/adapter.py       # Matrix via mautrix (optional E2EE)
 ├── matrix/rendering.py     # Outbound HTML sanitisation and TeX helpers
 ├── matrix/inbound_events.py # Inbound event construction and timestamps
+├── matrix/media_upload.py  # Outbound media upload and message payloads
 ├── mattermost/adapter.py   # Mattermost WebSocket API
 ├── email/adapter.py        # Email via IMAP/SMTP
 ├── sms/adapter.py          # SMS via Twilio
