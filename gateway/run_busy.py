@@ -101,6 +101,7 @@ class GatewayBusySessionMixin:
         _profile_scope_for_source = GatewayRunner._profile_scope_for_source
         _prepend_inbound_reply_context = GatewayRunner._prepend_inbound_reply_context
 
+        def _typed_command_prefix_for(self, platform: Platform) -> str: ...
 
     async def _strict_session_current(
         self, event: MessageEvent, session_key: str, *, session_id: str | None = None,
