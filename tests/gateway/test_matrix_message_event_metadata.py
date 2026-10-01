@@ -67,7 +67,6 @@ def _make_adapter(require_mention=False, auto_thread=False, monkeypatch=None):
         server_name="example.org",
         members_digest=None,
         chat_type="dm",  # DM shortcut so we bypass MATRIX_ALLOWED_ROOMS
-        members_digest=None,
     )
     adapter._resolve_room_identity = AsyncMock(return_value=identity)
     return adapter
@@ -206,7 +205,10 @@ _REPLY_WITHOUT_QUOTE = {
         pytest.param(
             False,
             {"body": "> <@carol:example.org> said it failed\nI disagree"},
-            {**_REPLY_WITHOUT_QUOTE, "text": "> <@carol:example.org> said it failed\nI disagree"},
+            {
+                **_REPLY_WITHOUT_QUOTE,
+                "text": "> <@carol:example.org> said it failed\nI disagree",
+            },
             id="own-quote-with-pill-and-no-blank-line",
         ),
         pytest.param(
@@ -237,7 +239,11 @@ _REPLY_WITHOUT_QUOTE = {
                     "m.in_reply_to": {"event_id": "$target1"},
                 },
             },
-            {**_REPLY_WITHOUT_QUOTE, "text": "> the logs say timeout\n\nwhy?", "reply_to_message_id": None},
+            {
+                **_REPLY_WITHOUT_QUOTE,
+                "text": "> the logs say timeout\n\nwhy?",
+                "reply_to_message_id": None,
+            },
             id="thread-message-own-quote",
         ),
         pytest.param(
@@ -250,7 +256,11 @@ _REPLY_WITHOUT_QUOTE = {
                     "because reasons"
                 ),
             },
-            {**_REPLY_WITHOUT_QUOTE, "text": "because reasons", "reply_to_text": "original question"},
+            {
+                **_REPLY_WITHOUT_QUOTE,
+                "text": "because reasons",
+                "reply_to_text": "original question",
+            },
             id="html-fallback",
         ),
         pytest.param(
@@ -263,7 +273,11 @@ _REPLY_WITHOUT_QUOTE = {
                     "because reasons"
                 ),
             },
-            {**_REPLY_WITHOUT_QUOTE, "text": "because reasons", "reply_to_text": "original question"},
+            {
+                **_REPLY_WITHOUT_QUOTE,
+                "text": "because reasons",
+                "reply_to_text": "original question",
+            },
             id="html-fallback-with-attributes",
         ),
         pytest.param(
@@ -291,7 +305,9 @@ _REPLY_WITHOUT_QUOTE = {
         ),
     ],
 )
-async def test_reply_strips_only_a_reply_fallback(monkeypatch, require_mention, content, expected):
+async def test_reply_strips_only_a_reply_fallback(
+    monkeypatch, require_mention, content, expected
+):
     """Matrix 1.13 (MSC2781) removed reply fallbacks, so a leading quote in a reply can be
     the user's own text. It must reach the agent, with a bot mention stripped like any text."""
     adapter = _make_adapter(require_mention=require_mention, monkeypatch=monkeypatch)

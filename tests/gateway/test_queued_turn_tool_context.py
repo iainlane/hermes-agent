@@ -54,6 +54,11 @@ async def test_queued_tool_context_restores_outer_identity_and_profile(
         )
         adapter = MatrixAdapter(PlatformConfig(enabled=True))
         adapter._reactions_enabled = False
+        adapter._joined_rooms.add("!room:test")
+        adapter._is_dm_room = AsyncMock(return_value=False)
+        adapter.set_authorization_check(
+            lambda user, _chat_type, _chat_id: user in {"@alice:test", "@bob:test"}
+        )
         reaction = AsyncMock(return_value={"success": True})
         monkeypatch.setattr(adapter, "add_reaction", reaction)
         reaction_mocks[profile] = reaction
