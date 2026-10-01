@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 from html import escape as _html_escape
 from html.parser import HTMLParser
 import re
+
+from gateway.platforms.base import _blank_spans, _code_spans, _delete_spans
 
 
 class _MatrixHtmlSanitizer(HTMLParser):
@@ -140,12 +143,25 @@ def _sanitize_matrix_html(html: str) -> str:
         return _html_escape(html or "")
 
 def _pre_sanitize_matrix_markdown(text: str) -> str:
-    """Remove unsafe raw HTML before Markdown conversion can escape it."""
-    result = re.sub(r"(?is)<\s*(script|style)\b[^>]*>.*?<\s*/\s*\1\s*>", "", text or "")
-    result = re.sub(r"""(?is)\s+on[a-z0-9_-]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)""", "", result)
-    return re.sub(
+    """Remove unsafe raw HTML outside literal Markdown code."""
+    text = text or ""
+    protected = _code_spans(text)
+    with suppress(ImportError):
+        from markdown.extensions.fenced_code import FencedBlockPreprocessor
+        from markdown.inlinepatterns import BACKTICK_RE
+
+        protected = [match.span() for match in FencedBlockPreprocessor.FENCED_BLOCK_RE.finditer(text)]
+        protected.extend(match.span() for match in re.finditer(BACKTICK_RE, text, re.DOTALL)
+                         if match.group(3) is not None)
+        protected.extend(match.span() for match in re.finditer(r"(?m)^(?: {4}| {0,3}\t)[^\n]*", text))
+    masked = _blank_spans(text, protected)
+    unsafe_patterns = (
+        r"(?is)<\s*(script|style)\b[^>]*>.*?<\s*/\s*\1\s*>",
+        r"""(?is)\s+on[a-z0-9_-]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)""",
         r"""(?is)\s+(href|src)\s*=\s*("[^"]*(?:javascript|data|vbscript):[^"]*"|'[^']*(?:javascript|data|vbscript):[^']*'|[^\s>]*(?:javascript|data|vbscript):[^\s>]*)""",
-        "", result)
+    )
+    return _delete_spans(text, [match.span() for pattern in unsafe_patterns
+                               for match in re.finditer(pattern, masked)])
 
 
 def _prepare_matrix_markdown(text: str) -> tuple[str, list[tuple[str, str]]]:
