@@ -23,6 +23,7 @@ The messaging gateway is the long-running process that connects Hermes to 20+ ex
 | `gateway/builtin_hooks/` | Extension point for always-registered hooks (none shipped) |
 | `gateway/platform_registry.py` | Adapter registry, factories, and deferred (lazy) loaders for bundled platform plugins |
 | `plugins/platforms/<name>/` | Bundled messaging adapters (most platforms: `adapter.py` + `plugin.yaml`) |
+| `plugins/platforms/matrix/adapter_media.py` | Inbound Matrix media admission, download and caching |
 | `gateway/platforms/` | Shared `base.py` plus legacy/direct adapters (Signal, API server, webhooks, …) |
 
 ## Architecture Overview
