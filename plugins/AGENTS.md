@@ -126,3 +126,6 @@ Matrix inbound event construction and server-time conversion are defined in
 
 Matrix outbound HTML sanitisation and TeX helpers are defined in
 `platforms/matrix/rendering.py`; the adapter imports the functions it uses.
+
+Matrix outbound upload payloads and encryption are defined in
+`platforms/matrix/media_upload.py`; the adapter includes its media mixin.
