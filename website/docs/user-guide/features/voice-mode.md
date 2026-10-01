@@ -435,6 +435,7 @@ When the bot is in a voice channel:
 - Transcripts appear in the text channel: `[Voice] @user: what you said`
 - Agent responses appear in the text channel. The current voice mode decides which replies are spoken in the voice channel
 - The text channel is the one where `/voice join` was issued
+- Running `/voice join` from another text channel moves the binding there; an utterance still being transcribed at that moment is dropped, not posted to the new channel
 - When the call ends, the text channel's voice mode returns to `off`. A call ends on `/voice leave`, after the inactivity timeout, and when the gateway stops, restarts or crashes
 
 ### Echo Prevention
