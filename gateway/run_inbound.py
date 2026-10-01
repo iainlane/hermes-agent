@@ -426,7 +426,7 @@ class GatewayInboundMixin:
                 # reaches the click handler, so the card would keep its buttons forever.
                 if callable(getattr(type(_clarify_adapter), "retire_clarify_card", None)):
                     try:
-                        await _clarify_adapter.retire_clarify_card(
+                        await getattr(_clarify_adapter, "retire_clarify_card")(
                             _pending_clarify.clarify_id,
                             t("gateway.clarify.answered",
                               response=_raw_clarify_reply if _pending_clarify.response == _clarify_mod.SKIPPED
@@ -449,9 +449,9 @@ class GatewayInboundMixin:
                 # notice (scheduled once the wait unblocks) finds nothing and stays a no-op.
                 _clarify_adapter = self._delivery_adapter_for(source)
                 # Class lookup: a MagicMock adapter must not fabricate the method.
-                if callable(getattr(type(_clarify_adapter), "retire_clarify_card", None)):
+                if _clarify_adapter is not None and callable(getattr(type(_clarify_adapter), "retire_clarify_card", None)):
                     try:
-                        await _clarify_adapter.retire_clarify_card(
+                        await getattr(_clarify_adapter, "retire_clarify_card")(
                             _pending_clarify.clarify_id,
                             t("gateway.clarify.cancelled"))
                     except Exception:
@@ -1373,6 +1373,8 @@ class GatewayInboundMixin:
 
         event, source, is_internal = self._hm_rescue_orphaned_fifo(event, source, is_internal, _quick_key)
 
+        from gateway.platforms.base_pending import release_pending_dispatch
+        release_pending_dispatch(self._delivery_adapter_for(source), _quick_key, event, claimed=True)
         _claim_state = self._session_state(_quick_key)
         if _active_session_lease is not None:
             _claim_state.turn.lease = _active_session_lease
