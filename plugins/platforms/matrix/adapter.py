@@ -157,6 +157,7 @@ from plugins.platforms.matrix.room_inspection import inspect_matrix_room
 from plugins.platforms.matrix.room_admin import administer_matrix_pin, administer_matrix_room
 from plugins.platforms.matrix.image_packs import matrix_image_packs
 from plugins.platforms.matrix.unread import MatrixUnreadState
+from plugins.platforms.matrix.permalinks import MatrixPermalinkRouting
 from gateway.platforms.base import (
     gateway_trust_env, BasePlatformAdapter,
     SendResult, classify_send_error, resolve_proxy_url, proxy_kwargs_for_aiohttp, _ssrf_redirect_guard,
@@ -805,6 +806,7 @@ class MatrixAdapter(MatrixApprovalMixin, MatrixReactionPromptMixin, MatrixRTCVoi
         except (TypeError, ValueError):
             self._room_backfill_limit = 20
         self._joined_rooms: Set[str] = set()
+        self._permalink_routing = MatrixPermalinkRouting()
         from collections import deque
         self._processed_events: deque = deque(maxlen=1000)  # event dedup, newest kept
         self._processed_events_set: set = set()
