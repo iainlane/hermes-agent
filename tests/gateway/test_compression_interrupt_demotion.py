@@ -80,6 +80,7 @@ def _make_runner(*, session_id: str = "parent-session") -> GatewayRunner:
 def _make_adapter() -> MagicMock:
     adapter = MagicMock()
     adapter._pending_messages = {}
+    adapter._pending_dispatch_reservations = {}
     adapter._send_with_retry = AsyncMock()
     adapter.config = MagicMock()
     adapter.config.extra = {}

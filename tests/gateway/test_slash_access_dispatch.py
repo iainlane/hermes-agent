@@ -70,6 +70,7 @@ def _make_runner(*, platform_extra: dict | None = None,
         }
     )
     adapter = MagicMock()
+    adapter._pending_dispatch_reservations = {}
     adapter.send = AsyncMock()
     runner.adapters = {platform: adapter}
     runner._voice_mode = {}
@@ -403,8 +404,8 @@ async def test_gating_isolated_per_platform():
         }
     )
     runner.adapters = {
-        Platform.DISCORD: MagicMock(send=AsyncMock()),
-        Platform.TELEGRAM: MagicMock(send=AsyncMock()),
+        Platform.DISCORD: MagicMock(send=AsyncMock(), _pending_dispatch_reservations={}),
+        Platform.TELEGRAM: MagicMock(send=AsyncMock(), _pending_dispatch_reservations={}),
     }
     runner._voice_mode = {}
     runner.hooks = SimpleNamespace(
