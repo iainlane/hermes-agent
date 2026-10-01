@@ -431,6 +431,7 @@ from gateway.platforms.base_exec_approval import (
 from gateway.platforms.event import MessageEvent, MessageType, ProcessingOutcome, TurnContextUpdate
 from gateway.platforms.base_pending import (
     _PendingDispatchReservation,
+    pending_dispatch_needs_snapshot,
     _can_join_pending_event, pending_dispatch_scope, release_pending_dispatch, reserve_pending_dispatch,
 )
 from gateway.warning_notifications import diagnostic_wake_muted
@@ -4027,7 +4028,7 @@ class BasePlatformAdapter(ABC):
             if not reserved.preserve_on_completion:
                 continue
             reserved.preserve_on_completion = False
-            if not reserved.claimed:
+            if pending_dispatch_needs_snapshot(self, reserved):
                 restore = getattr(self.gateway_runner, "_restore_pending_dispatch", None)
                 if callable(restore):
                     restore(session_key, reserved.event, self)
