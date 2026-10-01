@@ -353,7 +353,7 @@ async def test_cancel_timeout_recovers_only_non_durable_completed_input(tmp_path
     from gateway.platforms.base_pending import bind_pending_dispatch_input
     from gateway.session import SessionStore
     from hermes_state import SessionDB
-    from gateway.platforms import base as processing
+    import gateway.platforms.base_processing as processing
     from gateway.config import GatewayConfig
     from gateway.run import GatewayRunner
 
