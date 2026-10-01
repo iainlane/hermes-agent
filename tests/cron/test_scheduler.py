@@ -1920,10 +1920,11 @@ class TestDeliverResultTimeoutCancelsFuture:
 class _BlockingSendAdapter:
     """A live adapter whose send stays in flight until the test sets ``release``."""
 
-    def __init__(self):
+    def __init__(self, outcome="sent"):
         self.started = threading.Event()
         self.release = asyncio.Event()
         self.outcome = []
+        self.final_outcome = outcome
 
     async def send(self, chat_id, content, reply_to=None, metadata=None):
         from gateway.platforms.base import SendResult
@@ -1935,6 +1936,10 @@ class _BlockingSendAdapter:
             self.outcome.append("cancelled")
             raise
         self.outcome.append("sent")
+        if self.final_outcome == "error":
+            raise RuntimeError("late transport failure")
+        if self.final_outcome == "unconfirmed":
+            return None
         return SendResult(success=True, message_id="m1")
 
 
@@ -1960,13 +1965,15 @@ class TestDeliverResultLiveConfirmationTimeout:
     duplicate the message, and interrupting it could cut it off part-way. Regression for #38922."""
 
     @pytest.mark.parametrize(
-        ("loop_wedged", "expected"),
+        ("loop_wedged", "outcome", "expected"),
         [
-            pytest.param(False, (["sent"], 0, None), id="started-send-completes-once"),
-            pytest.param(True, ([], 1, None), id="unstarted-send-goes-standalone-only"),
+            pytest.param(False, "sent", (["sent"], 0, None, ["telegram:123"], False), id="started-send-completes-once"),
+            pytest.param(False, "error", (["sent"], 0, None, ["telegram:123"], True), id="started-send-later-fails"),
+            pytest.param(False, "unconfirmed", (["sent"], 0, None, ["telegram:123"], True), id="started-send-later-unconfirmed"),
+            pytest.param(True, "sent", ([], 1, None, [], False), id="unstarted-send-goes-standalone-only"),
         ],
     )
-    def test_live_adapter_confirmation_timeout(self, loop_wedged, expected):
+    def test_live_adapter_confirmation_timeout(self, loop_wedged, outcome, expected, caplog):
         from concurrent.futures import CancelledError
 
         from gateway.config import Platform
@@ -1974,7 +1981,7 @@ class TestDeliverResultLiveConfirmationTimeout:
         loop = asyncio.new_event_loop()
         loop_thread = threading.Thread(target=loop.run_forever, daemon=True)
         loop_thread.start()
-        adapter = _BlockingSendAdapter()
+        adapter = _BlockingSendAdapter(outcome)
         wedged, unwedge = threading.Event(), threading.Event()
 
         def wedge_loop():
@@ -2009,7 +2016,7 @@ class TestDeliverResultLiveConfirmationTimeout:
                     job, "Hello world", adapters={Platform.TELEGRAM: adapter}, loop=loop)
             unwedge.set()
             loop.call_soon_threadsafe(adapter.release.set)
-            with contextlib.suppress(CancelledError):
+            with contextlib.suppress(CancelledError, RuntimeError):
                 scheduled[0].result(timeout=5)
         finally:
             unwedge.set()
@@ -2026,7 +2033,11 @@ class TestDeliverResultLiveConfirmationTimeout:
                 )
                 loop.close()
 
-        assert (adapter.outcome, standalone_send.await_count, result) == expected
+        late_warning = any("after confirmation timeout" in record.message for record in caplog.records)
+        assert (
+            adapter.outcome, standalone_send.await_count, result,
+            job.get("last_delivery_unverified") or [], late_warning,
+        ) == expected
 
 
 class TestDeliverResultPartialSplitDelivery:
@@ -2092,10 +2103,12 @@ class TestDeliverResultLiveAdapterUnconfirmed:
         loop.is_running.return_value = True
 
         completed_future = Future()
-        completed_future.set_result(send_value)
 
         def fake_run_coro(coro, _loop):
-            coro.close()
+            try:
+                completed_future.set_result(asyncio.run(coro))
+            except Exception as exc:
+                completed_future.set_exception(exc)
             return completed_future
 
         job = {
