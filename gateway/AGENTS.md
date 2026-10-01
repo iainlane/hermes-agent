@@ -264,3 +264,4 @@ Matrix room identity reads are defined in `plugins/platforms/matrix/context_mixi
 formatted HTML helpers are defined in `plugins/platforms/matrix/rendering.py`.
 Matrix connection, sync checkpoints and disconnect cleanup are defined in
 `plugins/platforms/matrix/intake_mixin.py`.
+Restart-safe cron delivery draining is defined in `run_delivery_queue_watch.py`.
