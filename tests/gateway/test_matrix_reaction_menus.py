@@ -125,7 +125,7 @@ async def test_menu_choice_is_scoped_and_consumed_once(monkeypatch, rejection):
         adapter._redact_bot_approval_reactions = AsyncMock()
         bad.content.relates_to.event_id = "$card"
     if rejection == "picker":
-        from plugins.platforms.matrix.adapter import _MatrixPickerPrompt
+        from plugins.platforms.matrix.reaction_controls import _MatrixPickerPrompt
         callback = AsyncMock()
         adapter._model_picker_prompts_by_event["$card"] = _MatrixPickerPrompt(
             source.chat_id, "$card", "lane", {"✅": "model"}, callback, requester_user_id=source.user_id)
@@ -166,7 +166,7 @@ async def test_menu_callback_reenters_profile_scope_and_bounds_pending_controls(
     from agent.inline_tool_executors import INLINE_TOOL_EXECUTORS, InlineToolContext
     from gateway.run_turn_runner_menu import menu_callback
     from hermes_constants import get_hermes_home
-    from plugins.platforms.matrix.adapter import _MatrixPickerPrompt
+    from plugins.platforms.matrix.reaction_controls import _MatrixPickerPrompt
     from plugins.platforms.matrix.reaction_menu import MAX_PENDING_MENUS
     from tools.reaction_menu_model import ReactionMenu
 
