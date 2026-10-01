@@ -138,3 +138,88 @@ def test_rebuild_finishing_after_close_closes_the_replacement_and_its_handle(tmp
         server._rebuild_session_agent("sid", session, session_id="k")
     assert session["agent"] is None
     assert closed == ["agent", "db"]
+
+
+@pytest.mark.parametrize("isolated", [False, True])
+def test_tools_configure_preserves_busy_session_and_profile(
+    tmp_path, monkeypatch, isolated
+):
+    from agent.secret_scope import is_multiplex_active, set_multiplex_active
+    from hermes_constants import get_hermes_home
+    from tui_gateway import server
+    from tui_gateway.user_messages import busy_message
+
+    home = tmp_path / ".hermes"
+    profile = home / "profiles" / "worker"
+    profile.mkdir(parents=True)
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+    config = "platform_toolsets:\n  cli: [file]\n"
+    for path in (home, profile):
+        (path / "config.yaml").write_text(config)
+    before = [(path / "config.yaml").read_bytes() for path in (home, profile)]
+    resets, scopes, controls = [], [], []
+    bind_scopes = server._bind_build_profile_scopes
+
+    def bind(home):
+        scopes.append(home)
+        return bind_scopes(home)
+
+    monkeypatch.setattr(server, "_bind_build_profile_scopes", bind)
+    monkeypatch.setattr(server, "_turn_isolation_enabled", lambda *_: isolated)
+    monkeypatch.setattr(
+        server,
+        "_reset_session_agent",
+        lambda *args, **kwargs: resets.append(args) or {},
+    )
+    monkeypatch.setattr(
+        server,
+        "_send_compute_host_control",
+        lambda *args, **kwargs: controls.append(args) or {},
+    )
+    multiplexed = is_multiplex_active()
+    set_multiplex_active(True)
+    try:
+        for index, path in enumerate((home, profile, home)):
+            session = {
+                "profile_home": str(path),
+                "running": True,
+                "_compute_host_active": isolated,
+                "history_version": 7,
+                "history": [{"role": "user", "content": "active input"}],
+            }
+            unchanged = {**session, "history": list(session["history"])}
+            sid = f"busy-tools-{index}"
+            monkeypatch.setitem(server._sessions, sid, session)
+            response = server._methods["tools.configure"](
+                "busy",
+                {"session_id": sid, "action": "enable", "names": ["web"]},
+            )
+            assert {
+                "response": response,
+                "session": session,
+                "resets": resets,
+                "configs": [
+                    (path / "config.yaml").read_bytes() for path in (home, profile)
+                ],
+                "scopes": scopes,
+                "controls": controls,
+                "ambient_home": get_hermes_home(),
+            } == {
+                "response": {
+                    "jsonrpc": "2.0",
+                    "id": "busy",
+                    "error": {
+                        "code": 4009,
+                        "message": busy_message("tools"),
+                    },
+                },
+                "session": unchanged,
+                "resets": [],
+                "configs": before,
+                "scopes": [],
+                "controls": [],
+                "ambient_home": home,
+            }
+    finally:
+        set_multiplex_active(multiplexed)
