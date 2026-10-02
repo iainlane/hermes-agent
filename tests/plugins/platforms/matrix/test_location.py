@@ -64,7 +64,7 @@ def dispatched_messages(adapter):
     ]
 
 
-def room_message(event, text):
+def room_message(event, text, *, requires_mention=False):
     return MessageEvent(
         text=text,
         message_type=MessageType.TEXT,
@@ -80,9 +80,12 @@ def room_message(event, text):
             user_id=event.sender,
             user_name="alice",
             guild_id="example.org",
+            scope_id="example.org",
+            source_permalink=f"https://matrix.to/#/{event.room_id}/{event.event_id}",
             message_id=event.event_id,
         ),
         timestamp=DISPATCH_TIME,
+        metadata={"matrix_requires_mention": True} if requires_mention else {},
     )
 
 
@@ -245,10 +248,13 @@ async def test_location_reaches_text_path_with_original_identity(
             user_name="alice",
             thread_id="$root",
             guild_id="example.org",
+            scope_id="example.org",
+            source_permalink=f"https://matrix.to/#/{event.room_id}/{event.event_id}",
             parent_chat_id=event.room_id,
             message_id=event.event_id,
         ),
         timestamp=message.timestamp,
+        metadata={"matrix_requires_mention": True} if adapter._require_mention else {},
     )
     assert event.content == original
 
@@ -318,6 +324,7 @@ async def test_location_reply_keeps_quoted_references_out_of_current_text(
         reply_to_text=quoted_text,
         reply_to_author_id="@bot:example.org",
         reply_to_author_name="bot",
+        reply_to_author_authorized=False,
         source=SessionSource(
             platform=Platform.MATRIX,
             chat_id=event.room_id,
@@ -327,10 +334,13 @@ async def test_location_reply_keeps_quoted_references_out_of_current_text(
             user_name="alice",
             thread_id="$root",
             guild_id="example.org",
+            scope_id="example.org",
+            source_permalink=f"https://matrix.to/#/{event.room_id}/{event.event_id}",
             parent_chat_id=event.room_id,
             message_id=event.event_id,
         ),
         timestamp=message.timestamp,
+        metadata={"matrix_requires_mention": True} if adapter._require_mention else {},
     )
     assert event.content == original
 
@@ -456,7 +466,7 @@ async def test_location_label_drops_bot_mention_like_text(adapter, body, text):
 
     await adapter._on_room_message(event)
 
-    assert dispatched_messages(adapter) == [room_message(event, text)]
+    assert dispatched_messages(adapter) == [room_message(event, text, requires_mention=adapter._require_mention)]
 
 
 @pytest.mark.asyncio
@@ -488,7 +498,7 @@ async def test_location_bare_mention_does_not_claim_parked_voice(adapter):
     await adapter._on_room_message(location)
 
     assert dispatched_messages(adapter) == [
-        room_message(location, "📍 Location: 1.0, 2.0")
+        room_message(location, "📍 Location: 1.0, 2.0", requires_mention=True)
     ]
 
 

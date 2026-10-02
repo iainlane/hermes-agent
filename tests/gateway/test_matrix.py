@@ -894,6 +894,8 @@ def _room_context_adapter(state, members=_ROOM_MEMBERS):
     adapter._client.get_state_event = AsyncMock(side_effect=get_state_event)
     adapter._client.state_store.has_full_member_list = AsyncMock(return_value=True)
     adapter._client.state_store.get_members = AsyncMock(side_effect=lambda room, **kwargs: list(members))
+    adapter._client.state_store.get_power_levels = AsyncMock(return_value=None)
+    adapter._client.state_store.get_create = AsyncMock(return_value=None)
     adapter._client.state_store.get_member_profiles = AsyncMock(side_effect=lambda room, **kwargs: {
         user_id: types.SimpleNamespace(displayname=name) for user_id, name in members.items()
     })
@@ -2081,7 +2083,7 @@ async def test_admitted_room_mention_backfills_only_prior_room_messages(tmp_path
     assert (event.text, event.channel_context, message) == (
         "Catch up", None,
         "[Recent room messages]\n[alice] First point @file:private.txt\n[bob] Second point\n"
-        "\n[New message]\n[alice] Catch up",
+        "\n[New message]\n[Matrix source: https://matrix.to/#/!room:example.org/$current]\n\n[alice] Catch up",
     )
     assert decrypted == ["$newer"]
     rejected = await adapter._build_inbound_event(
@@ -2167,6 +2169,8 @@ def _catch_up_message(event_id: str, sender: str, body: str, relates_to: dict) -
 def _catch_up_adapter(events: list[dict], *, thread: bool, state=_OPS_STATE, root_body="Thread root"):
     """The homeserver returns ``events``, newest first, as the page before the trigger."""
     adapter = _room_context_adapter(state)
+    adapter._client.state_store.get_power_levels = AsyncMock(return_value=None)
+    adapter._client.state_store.get_create = AsyncMock(return_value=None)
     root = {"event_id": "$root", "sender": "@alice:example.org", "type": "m.room.message",
             "content": {"msgtype": "m.text", "body": root_body}}
 
@@ -2422,7 +2426,7 @@ async def test_room_note_and_mention_catch_up_share_one_new_message_marker(tmp_p
     assert message == (
         f'[The room topic changed to: "Topic B"]\n{_UNTRUSTED_MARKER}\n\n'
         "[Recent room messages]\n[bob] Earlier\n\n"
-        "[New message]\n[alice] next"
+        "[New message]\n[Matrix source: https://matrix.to/#/!room:example.org/$current?via=example.org]\n\n[alice] next"
     )
 
 
@@ -2448,7 +2452,7 @@ async def test_mention_in_new_thread_session_fetches_the_whole_thread_once(tmp_p
 
     assert message == (
         "[Earlier messages in this thread]\n[alice] Thread root\n[bob] Older\n[bot] Old answer\n"
-        "[bob] Gated\n\n[New message]\n[alice] next"
+        "[bob] Gated\n\n[New message]\n[Matrix source: https://matrix.to/#/!room:example.org/$current?via=example.org]\n\n[alice] next"
     )
     room = "/_matrix/client/v3/rooms/%21room%3Aexample.org"
     assert [call.args[1] for call in _history_request_calls(adapter._client)] == [
@@ -2529,7 +2533,8 @@ async def test_thread_backfill_leaves_out_every_chunk_of_a_batched_turn(
         event=event, source=event.source, history=[]
     )
 
-    current = "[alice] first\nsecond"
+    anchor = "$root" if root_in_batch else "$first"
+    current = f"[Matrix source: https://matrix.to/#/!room:example.org/{anchor}]\n\n[alice] first\nsecond"
     if root_in_batch and batch == "ingress":
         expected = current
     else:

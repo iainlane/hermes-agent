@@ -440,7 +440,7 @@ async def test_registry_thread_refusals_and_partial_delivery(
         replacement = SimpleNamespace(crypto=None, send_message_event=AsyncMock())
         adapter._client = replacement
 
-    async def policy(room):
+    async def policy(room, *, owner=None, require_classification=False):
         nonlocal operation_task
         operation_task = asyncio.current_task()
         if failure in {"policy_owner", "read_owner"}:
@@ -588,7 +588,7 @@ async def test_registry_thread_refusals_and_partial_delivery(
             await native_client.api.session.close()
     expected: dict[str, Any] = {"success": False, "error": _FAILURE_ERRORS[failure]}
     if failure == "read_owner":
-        expected = {"error": _FAILURE_ERRORS[failure]}
+        expected = {"error": "Matrix client changed"}
     if sent:
         expected.update(room_id=ROOM, root_event_id="$root", partial=True)
     visible = failure in {"interrupt_after_reply", "chunk_permission"}
@@ -798,7 +798,7 @@ async def test_reply_delivered_before_a_reconnect_is_recorded():
             "partial": True,
         },
         "latest": "$reply",
-        "cached": MatrixEventContext("@bot:server", "Reply"),
+        "cached": MatrixEventContext("@bot:server", "Reply", event_id="$reply"),
     }
 
 

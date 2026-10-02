@@ -90,7 +90,7 @@ async def test_rate_limited_outbound_paths(operation, error, failures, attempts,
         result = await calls[operation]()
     expected_results = {
         "send": SendResult(success=success, message_id="$sent" if success else None,
-                           error=str(errors[error]()) if not success else None),
+                           error=f"Matrix target '!room:example.org': {errors[error]()}" if not success else None),
         "reaction": "$sent" if success else None,
         "redact": success,
     }
@@ -156,7 +156,8 @@ async def test_media_upload_retries_only_rate_limited_content(msgtype, error, fa
     })
     assert (result, adapter._client.send_calls, backoff_delays, payloads) == (
         SendResult(success=success, message_id="$sent" if success else None,
-                   error=str(errors[error]()) if not success else None),
+                   error=f"Matrix target '!room:example.org': {errors[error]()}" if not success else None,
+                           error_kind={"limit": "rate_limited", "forbidden": "forbidden", "unknown": "unknown"}.get(error) if not success else None),
         attempts, delays, [expected_payload] * attempts,
     )
     adapter._client.upload_media.assert_awaited_once_with(

@@ -534,6 +534,7 @@ async def test_plain_room_replies_to_a_reaction_prompt_quote_the_prompt(mode, pa
         )
     )
     adapter._user_id = "@bot:example.org"
+    adapter._schedule_approval_resolution_watch = MagicMock()
     client = MagicMock()
     client.send_message_event = AsyncMock(side_effect=[f"$sent{i}" for i in range(20)])
     adapter._client = client
@@ -544,7 +545,7 @@ async def test_plain_room_replies_to_a_reaction_prompt_quote_the_prompt(mode, pa
         return f"Reasoning set to {value}."
 
     if path == "approval from another user":
-        prompt = await adapter.send_exec_approval(room_id, "rm -rf /tmp/cache", "session-1")
+        prompt = await adapter.send_exec_approval(room_id, "rm -rf /tmp/cache", "session-1", request_id="approval")
         sender, key = "@mallory:example.org", "✅"
     else:
         prompt = await adapter.send_choice_picker(
