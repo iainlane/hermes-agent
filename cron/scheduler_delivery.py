@@ -847,11 +847,11 @@ def _send_media_via_adapter(
 ) -> list:
     """Send MEDIA files as native attachments (routed by extension, as in
     _process_message_background). Returns per-file error strings so a dropped attachment surfaces
-    in run status, not just the gateway log. A file whose send timed out may still be delivered;
+    in run status, not just the gateway log. A file whose started send timed out may still be delivered;
     its path is also added to ``in_flight``."""
     from gateway.platforms.base import (
         BasePlatformAdapter, should_send_media_as_audio, validate_media_delivery_path)
-    from agent.async_utils import safe_schedule_threadsafe
+    from agent.async_utils import WithdrawableDispatch
     job_ref = {"id": job.get("id", "?")}
     errors: list = []
     requested = [(str(p), v) for p, v in (media_files or [])]
@@ -880,18 +880,21 @@ def _send_media_via_adapter(
                 method, path_kw = "send_document", "file_path"
             coro = getattr(adapter, method)(
                 chat_id=chat_id, metadata=metadata, **{path_kw: media_path})
-            future = safe_schedule_threadsafe(coro, loop)
-            if future is None:
+            dispatch = WithdrawableDispatch.schedule(coro, loop)
+            if dispatch is None:
                 _note_target_error(
                     job_ref, f"cannot send media {media_path}: gateway loop unavailable", errors)
                 return errors
             try:
                 # Large attachments can exceed 30s; configurable via _get_media_send_timeout().
-                result = future.result(timeout=_script._get_media_send_timeout())
+                result = dispatch.result(timeout=_script._get_media_send_timeout())
             except TimeoutError:
-                future.cancel()
-                if in_flight is not None:
-                    in_flight.append(media_path)
+                if not dispatch.withdraw():
+                    if in_flight is not None:
+                        in_flight.append(media_path)
+                    dispatch.add_done_callback(
+                        lambda future, where=f"{chat_id} media {media_path}":
+                        _observe_late_live_send(future, job_ref["id"], where))
                 raise
             if result and not getattr(result, "success", True):
                 _note_target_error(
@@ -1320,9 +1323,9 @@ def _live_send_media(
     delivery_errors: list,
 ) -> list:
     """Send extracted media as native attachments with the same routing as the text send. Each
-    file is sent on its own so the attachments that failed are known; they are returned. A send
-    that timed out may still arrive, so its file is not returned and its error goes to
-    ``delivery_errors``."""
+    file is sent on its own so failed or withdrawn uploads can be returned for fallback. A started
+    upload continues after its confirmation timeout; its file is excluded from fallback and its
+    error goes to ``delivery_errors``."""
     routed_media_metadata = dict(media_metadata or {})
     if t.is_relay:
         routed_media_metadata["_relay_logical_platform"] = t.platform.value
