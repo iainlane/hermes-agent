@@ -20,9 +20,10 @@ from tests.integration.matrix_live.conftest import (
     MatrixAccount,
     _wait_for,
 )
-from tests.integration.matrix_live.context_client import group_member  # noqa: F401
 from tests.integration.matrix_live.edit_client import begin, edits, final, send
 from tests.integration.matrix_live.test_edit_followups import marker
+
+pytest_plugins = ["tests.integration.matrix_live.context_client"]
 
 
 @pytest.fixture
@@ -249,15 +250,26 @@ def test_pending_correction_keeps_typed_identity_authority_and_user_receipt_acro
     content = json.dumps(corrections_sent[0]["messages"][-1]["content"])
     assert "[in:obsolete]" not in content and "[in:forgery]" not in content
     assert f"[Correction to earlier message {ids['original']}]" in content
-    assert len(receipts()) == 1 and receipts()[0][1] == owner
-    assert "[in:latest]" in receipts()[0][0]
+    final_receipts = receipts()
+    normalized_receipts = [
+        {
+            "owner": recorded_owner,
+            "latest": "[in:latest]" in recorded_content,
+            "original_target": f"[Correction to earlier message {ids['original']}]"
+            in recorded_content,
+        }
+        for recorded_content, recorded_owner in final_receipts
+    ]
+    assert normalized_receipts == [
+        {"owner": owner, "latest": True, "original_target": True}
+    ]
     artifact.write_text(
         json.dumps(
             {
                 "shutdown": saved,
                 "correction_uid": uid,
                 "input_owner": owner,
-                "receipts": receipts(),
+                "receipts": final_receipts,
                 "restored_requests": requests,
                 "native_reply_relation": relation,
                 "retained": retained(),
