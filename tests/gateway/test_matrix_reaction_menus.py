@@ -278,7 +278,7 @@ async def test_menu_choice_follows_compression_but_not_reset(tmp_path, monkeypat
     runner = object.__new__(GatewayRunner)
     runner.config = GatewayConfig()
     runner.session_store = store
-    runner._is_user_authorized_for_source = lambda source: True
+    monkeypatch.setattr(runner, "_is_user_authorized_for_source", lambda source, *, allow_adapter_delegation=True: True)
     runner._deliver_platform_notice = AsyncMock()
     admitted = []
 
@@ -302,7 +302,9 @@ async def test_menu_choice_follows_compression_but_not_reset(tmp_path, monkeypat
         store._save()
     else:
         store.reset_session(entry.session_key)
-    current = store.lookup_by_session_key(entry.session_key).session_id
+    current_entry = store.lookup_by_session_key(entry.session_key)
+    assert current_entry is not None
+    current = current_entry.session_id
 
     await adapter._on_reaction(_menu_reaction(source, "$menu"))
     [event] = admitted

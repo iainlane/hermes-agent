@@ -56,17 +56,20 @@ def _make_adapter():
 class _FakeMatrixClient:
     def __init__(self):
         from mautrix.client.state_store import MemoryStateStore
+        from mautrix.client.state_store.memory import SerializedStateStore
+        from mautrix.types import RoomID, UserID
 
-        joined = {"@bot:example.org": {"membership": "join"}, SENDER: {"membership": "join"}}
-        rooms = (PROJECT_A_ROOM_ID, PROJECT_B_ROOM_ID)
+        joined = {UserID("@bot:example.org"): {"membership": "join"}, UserID(SENDER): {"membership": "join"}}
+        rooms = (RoomID(PROJECT_A_ROOM_ID), RoomID(PROJECT_B_ROOM_ID))
         self.state_store = MemoryStateStore()
-        self.state_store.deserialize({
+        serialized: SerializedStateStore = {
             "members": {room_id: joined for room_id in rooms},
             "full_member_list": {room_id: True for room_id in rooms},
             "power_levels": {},
             "encryption": {},
             "create": {},
-        })
+        }
+        self.state_store.deserialize(serialized)
 
     async def get_state_event(self, room_id, event_type):
         rid = str(room_id)

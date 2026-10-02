@@ -362,8 +362,6 @@ async def test_matrix_source_link_reaches_model_without_persisting_as_user_text(
     runner = GatewayRunner.__new__(GatewayRunner)
     runner.config = GatewayConfig(group_sessions_per_user=False)
     runner.adapters = {}
-    runner._model = "test-model"
-    runner._base_url = ""
     source = SessionSource(
         platform=Platform.MATRIX,
         chat_id="!room:example.org",

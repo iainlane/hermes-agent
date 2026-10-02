@@ -188,7 +188,9 @@ async def test_pinned_injection_follows_compression_but_not_reset(tmp_path, rout
     """Compression continues the pinned conversation; /new ends it."""
     store = SessionStore(sessions_dir=tmp_path / "sessions", config=GatewayConfig())
     request.addfinalizer(store.close_all_db_handles)
-    entry = store.get_or_create_session(_entry().origin)
+    origin = _entry().origin
+    assert origin is not None
+    entry = store.get_or_create_session(origin)
     parent = entry.session_id
     adapter = SimpleNamespace(handle_message=AsyncMock())
     runner = _runner(None, adapter)
@@ -209,8 +211,11 @@ async def test_pinned_injection_follows_compression_but_not_reset(tmp_path, rout
         store._save()
     else:
         store.reset_session(entry.session_key)
-    current = store.lookup_by_session_key(entry.session_key).session_id
+    current_entry = store.lookup_by_session_key(entry.session_key)
+    assert current_entry is not None
+    current = current_entry.session_id
 
+    assert event.source is not None
     resolved = await runner._hmwa_resolve_session(event, event.source)
 
     observed = (None if resolved is None else resolved[1].session_id,

@@ -11,7 +11,7 @@ from agent.secret_scope import set_multiplex_active
 from gateway.config import Platform, PlatformConfig
 from gateway.platforms.base import SendResult
 from gateway.run import _profile_runtime_scope
-from gateway.run_turn import GatewayTurnMixin
+from gateway.run import GatewayRunner
 from gateway.session import SessionSource
 from gateway.stream_consumer import GatewayStreamConsumer, StreamConsumerConfig
 from gateway.turn_context import TurnContext
@@ -146,7 +146,7 @@ async def test_completed_commentary_reconciles_final_with_matrix_reply_policy(
         source=source, session_key="matrix-turn", stream_consumer_holder=[consumer]
     )
     response = {"final_response": final_text}
-    runner = GatewayTurnMixin()
+    runner = object.__new__(GatewayRunner)
     runner._delivery_adapter_for = MagicMock(return_value=adapter)
     runner._should_send_voice_reply = MagicMock(return_value=False)
     runner._deliver_media_from_response = AsyncMock()

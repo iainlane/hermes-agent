@@ -2,6 +2,7 @@
 
 import asyncio
 from copy import deepcopy
+from unittest.mock import AsyncMock
 
 import pytest
 from mautrix.errors.request import MForbidden, MLimitExceeded, MatrixStandardRequestError
@@ -26,6 +27,7 @@ class _FlakyClient:
         self.redact_calls = 0
         self.send_payloads = []
         self.redact_payloads = []
+        self.upload_media = AsyncMock()
 
     async def send_message_event(self, room_id, event_type, content):
         self.send_calls += 1
@@ -67,7 +69,7 @@ def backoff_delays(monkeypatch):
     ("unknown", 1, 1, [], False),
     ("cancelled", 1, 1, [], False),
 ])
-async def test_rate_limited_outbound_paths(operation, error, failures, attempts, delays, success, backoff_delays):
+async def test_rate_limited_outbound_paths(operation, error, failures, attempts, delays, success, backoff_delays, monkeypatch):
     errors = {
         "limit": _limit_exceeded,
         "plain429": lambda: MatrixStandardRequestError(429, "Too Many Requests"),
@@ -122,9 +124,7 @@ async def test_rate_limited_outbound_paths(operation, error, failures, attempts,
     ("forbidden", 1, 1, [], False),
     ("unknown", 1, 1, [], False),
 ])
-async def test_media_upload_retries_only_rate_limited_content(msgtype, error, failures, attempts, delays, success, backoff_delays):
-    from unittest.mock import AsyncMock
-
+async def test_media_upload_retries_only_rate_limited_content(msgtype, error, failures, attempts, delays, success, backoff_delays, monkeypatch):
     errors = {
         "limit": _limit_exceeded,
         "plain429": lambda: MatrixStandardRequestError(429, "Too Many Requests"),
@@ -141,7 +141,7 @@ async def test_media_upload_retries_only_rate_limited_content(msgtype, error, fa
         payloads.append((str(room_id), str(event_type), deepcopy(content)))
         return await original_send(room_id, event_type, content)
 
-    adapter._client.send_message_event = record_send
+    monkeypatch.setattr(adapter._client, "send_message_event", record_send)
     result = await adapter._upload_and_send(
         "!room:example.org", b"content", "original.dat", "application/octet-stream", msgtype,
         caption="Caption", reply_to="$reply", metadata={"thread_id": "$thread"},
