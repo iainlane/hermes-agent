@@ -105,7 +105,8 @@ class TestLooksLikeMatrixMediaFilename:
 def _make_adapter(monkeypatch, payload: bytes):
     from gateway.config import PlatformConfig
     from mautrix.client.state_store import MemoryStateStore
-    from plugins.platforms.matrix.adapter import MatrixAdapter, MatrixRoomIdentity
+    from plugins.platforms.matrix.adapter import MatrixAdapter
+    from plugins.platforms.matrix.room_context import MatrixRoomIdentity
     from tests.gateway.matrix_helpers import FakeMediaDownload
 
     adapter = MatrixAdapter(PlatformConfig(

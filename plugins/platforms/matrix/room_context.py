@@ -258,3 +258,21 @@ class MatrixHistoryContext:
         if reactions_unavailable:
             lines.insert(1, "[Some reactions could not be read.]")
         return "\n".join(lines)
+
+
+@dataclass(frozen=True)
+class MatrixRoomIdentity:
+    """Resolved Matrix room identity for routing and prompt context."""
+    room_id: str
+    room_name: str | None
+    room_topic: str | None
+    canonical_alias: str | None
+    server_name: str | None
+    joined_member_count: int | None
+    # None when any state or member read failed. A turn then reports nothing and keeps the saved baseline.
+    room_state: MatrixRoomState | None
+    is_direct_account_data: bool
+    display_name: str
+    has_explicit_name: bool
+    chat_type: str
+    conflict: bool = False
