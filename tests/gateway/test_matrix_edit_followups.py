@@ -120,6 +120,9 @@ class BusyRunner(GatewayBusySessionMixin):
         self.steer = AsyncMock(side_effect=AssertionError("edit entered the active model turn"))
         self._resolve_busy_steer_or_redirect = self.steer
 
+    def _defer_for_startup_restore(self, event):
+        return False
+
     def _delivery_adapter_for(self, source):
         return self.adapter
 

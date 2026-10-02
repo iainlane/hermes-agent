@@ -17,6 +17,7 @@ from gateway.run_inbound_turn_context import prepend_turn_context_note, turn_con
 from gateway.session import SessionSource, format_untrusted_prompt_value, is_shared_multi_user_session, neutralize_untrusted_inline_text
 
 if TYPE_CHECKING:
+    from gateway.platforms.base import BasePlatformAdapter
     from gateway.run import GatewayRunner
     from gateway.run_inbound import GatewayInboundMixin
 
