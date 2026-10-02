@@ -17,6 +17,8 @@ logger = logging.getLogger("gateway.stream_consumer")
 class StreamFallbackMixin:
     """Non-streaming delivery paths used once progressive edits fail or the turn ends oddly."""
 
+    _initial_reply_to_id: Optional[str]
+
     async def _send_new_chunk(self, text: str, reply_to_id: Optional[str], *,
                               final: bool = False) -> Optional[str]:
         """Send a new chunk threaded to ``reply_to_id``; returns the new message_id."""

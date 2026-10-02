@@ -176,6 +176,7 @@ class GatewayTurnMixin(GatewayTurnExecutionMixin, GatewayTurnPreparationMixin, G
 
     if TYPE_CHECKING:
         _delivery_adapter_for = GatewayRunner._delivery_adapter_for
+        _deliver_platform_notice = GatewayRunner._deliver_platform_notice
         _session_state = GatewayRunner._session_state
         _session_env_scope = GatewayRunner._session_env_scope
 
