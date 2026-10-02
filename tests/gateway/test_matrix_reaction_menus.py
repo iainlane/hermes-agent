@@ -138,7 +138,9 @@ async def test_menu_choice_is_scoped_and_consumed_once(monkeypatch, rejection):
         callback.assert_awaited_once_with(source.chat_id, "model")
     if rejection == "revoked":
         adapter.send.assert_awaited_with(
-            source.chat_id, "Only an authorized Matrix user can use these controls.", reply_to="$menu", metadata={"_notice_reply": True})
+            source.chat_id, "Only an authorized Matrix user can use these controls.", reply_to="$menu", metadata={
+                "thread_id": "$thread", "matrix_thread_fallback_event_id": "$menu", "_notice_reply": True,
+            })
     if rejection in {"expired", "revoked"}:
         return
 

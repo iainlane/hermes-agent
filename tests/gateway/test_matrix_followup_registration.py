@@ -579,6 +579,7 @@ async def test_replacement_transport_preserves_turn_queue_and_final_choice(
         )
     )
     turn = SimpleNamespace(
+        processing_event=None,
         mute_notification_reply=True,
         stream_consumer_holder=[],
         result_holder=[{"completed": True}],

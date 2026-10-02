@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import time
-
 from plugins.platforms.matrix.reaction_menu import MENU_TIMEOUT_SECONDS, expire_menu as _expire_reaction_menu
 
 from collections.abc import Callable, Iterable
@@ -14,6 +12,7 @@ from agent.i18n import t
 
 if TYPE_CHECKING:
     from gateway.platforms.base import SendResult
+    from plugins.platforms.matrix.adapter import MatrixAdapter
 
 
 @dataclass
@@ -70,6 +69,8 @@ class MatrixReactionControlMixin:
         self, chat_id: str, lines: list, choices: dict, session_key: str, on_selected, metadata, registry: dict,
         label: str, *, is_menu: bool = False) -> SendResult:
         """Send picker *lines*, register a _MatrixPickerPrompt under the event, seed its reactions."""
+        from plugins.platforms.matrix.adapter import time
+
         return await self._send_reaction_prompt(
             chat_id, "\n".join(lines), metadata,
             lambda message_id, requester, expires_at: _MatrixPickerPrompt(
@@ -106,7 +107,7 @@ class MatrixReactionControlMixin:
             t("platform.matrix.picker.invalid_model_reaction"), self._expire_matrix_model_picker_prompt,
             ("switch model", "platform.matrix.picker.verb_switch_model"), redact_bot_reactions=True)
 
-    async def _handle_choice_picker_reaction(self, room_id: str, reacts_to: str, key: str, sender: str) -> bool:
+    async def _handle_choice_picker_reaction(self: MatrixAdapter, room_id: str, reacts_to: str, key: str, sender: str) -> bool:
         """Apply a choice-picker reaction. True if the reaction targeted a pending picker."""
         async def _expire(_room_id, target_event_id, prompt):
             if prompt.is_menu:

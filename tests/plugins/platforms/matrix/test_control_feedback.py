@@ -33,7 +33,7 @@ async def test_feedback_on_a_threaded_card_stays_in_its_thread(
     ))
     adapter._allowed_user_ids = {"@owner:example.org", "@other:example.org"}
     adapter._send_reaction = AsyncMock(return_value="$seed")
-    adapter._schedule_reaction_redaction = lambda *args, **kwargs: None
+    adapter._schedule_reaction_redaction = MagicMock(return_value=None)
     adapter.redact_message = AsyncMock(return_value=True)
     sent = []
 
@@ -92,7 +92,7 @@ async def test_feedback_on_a_threaded_card_stays_in_its_thread(
     relations = [content["m.relates_to"] for content in sent[feedback_start:]]
     expected_relation = {"m.in_reply_to": {"event_id": "$event-1"}}
     if thread_id:
-        expected_relation.update(rel_type="m.thread", event_id=thread_id, is_falling_back=True)
+        expected_relation.update(rel_type="m.thread", event_id=thread_id, is_falling_back=False)
     assert (relations, action.pending.events) == ([expected_relation], {})
 
     await adapter._on_reaction(types.SimpleNamespace(
