@@ -894,8 +894,10 @@ class GatewayBusySessionMixin:
         turn; an input that has not started waits for the turn."""
         from gateway.run_turn_followup_ack import _followup_processing_hooks_apply
 
-        event._processing_state.defer_unstarted()
         processing_event = turn.processing_event
+        if processing_event is None:
+            return
+        event._processing_state.defer_unstarted()
         adapter = self._intake_adapter_for(event.source)
         # The queued lane runs no hooks for adapters without their own start hook, so an attached
         # input that comes back as a leftover steer would never complete there.
