@@ -4,7 +4,6 @@ import asyncio
 import importlib
 import json
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, call
 
 import pytest
@@ -15,6 +14,7 @@ from gateway.config import GatewayConfig, Platform, PlatformConfig
 from gateway.platforms.event import MessageEvent, MessageType
 from gateway.run import GatewayRunner, _profile_runtime_scope
 from gateway.session import SessionSource
+from gateway.turn_context import TurnContext
 from gateway.session_identity import replace_source
 from gateway.session_context import (
     clear_session_vars, get_session_env, get_session_transport, set_session_vars,
@@ -158,7 +158,7 @@ async def test_queued_tool_context_restores_outer_identity_and_profile(
         source,
     ]
     key = runner._session_key_for_source(source)
-    turn = SimpleNamespace(
+    turn = TurnContext(
         source=source,
         session_key=key,
         session_id="sid",
