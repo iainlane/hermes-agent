@@ -21,7 +21,7 @@ from gateway.config import Platform
 from gateway.platforms.base import BasePlatformAdapter, EphemeralReply, SendResult
 from gateway.platforms.base_pending import Withdraw, ingress_order, pending_dispatch_needs_snapshot
 from gateway.platforms.event import MessageEvent, MessageType, ProcessingOutcome, _ProcessingCompletion, _ProcessingPhase
-from gateway.platforms.base_pending import _can_join_pending_event, is_pending_redispatch, release_pending_dispatch, pending_dispatch_records, pending_dispatch_withdrawn, pending_dispatch_record
+from gateway.platforms.base_pending import can_join_pending_event, is_pending_redispatch, release_pending_dispatch, pending_dispatch_records, pending_dispatch_withdrawn, pending_dispatch_record
 from gateway.session import SessionSource
 from gateway.whatsapp_identity import canonical_whatsapp_identifier
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -543,7 +543,7 @@ class GatewayBusySessionMixin:
         if (
             existing is not None
             and not self._overflow_queue(session_key)
-            and _can_join_pending_event(existing, event)
+            and can_join_pending_event(existing, event)
             and MessageType.PHOTO in merge_types
             and merge_types <= {MessageType.TEXT, MessageType.PHOTO}
         ):

@@ -77,7 +77,7 @@ def _same_pending_security_context(first: MessageEvent, second: MessageEvent) ->
     )
 
 
-def _can_join_pending_event(first: MessageEvent, second: MessageEvent) -> bool:
+def can_join_pending_event(first: MessageEvent, second: MessageEvent) -> bool:
     """Whether coalescing preserves attribution, reply context and turn validation."""
     return (
         same_message_sender(first, second)

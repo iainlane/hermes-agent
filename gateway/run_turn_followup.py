@@ -374,7 +374,7 @@ class GatewayQueuedFollowupMixin:
     async def _park_followup_at_recursion_cap(
         self: GatewayRunner, adapter: Any, session_key: str | None, event: MessageEvent,
     ) -> None:
-        from gateway.platforms.base_pending import _can_join_pending_event, pending_dispatch_withdrawn
+        from gateway.platforms.base_pending import can_join_pending_event, pending_dispatch_withdrawn
 
         if session_key is None:
             return
@@ -383,7 +383,7 @@ class GatewayQueuedFollowupMixin:
         existing = adapter._pending_messages.get(session_key)
         media_types = {getattr(existing, "message_type", None), event.message_type}
         if (existing is not None and not self._overflow_queue(session_key)
-                and _can_join_pending_event(existing, event)
+                and can_join_pending_event(existing, event)
                 and MessageType.PHOTO in media_types
                 and media_types <= {MessageType.TEXT, MessageType.PHOTO}):
             await self._complete_discarded_event(self._merge_into_pending_slot(adapter, session_key, event))
