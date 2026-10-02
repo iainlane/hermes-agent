@@ -11,26 +11,37 @@ import pytest
 from gateway.platforms.base_pending import pending_dispatch_scope, release_pending_dispatch, reserve_pending_dispatch
 from gateway.platforms.event import MessageType
 from gateway.run import _AGENT_PENDING_SENTINEL
-from gateway.run_inbound import GatewayInboundMixin
+from gateway.session import SessionSource
 from gateway.wake import WakeNotAccepted, admit_internal_event
 from tests.gateway.test_active_session_text_merge import _make_event, _make_initialized_adapter
 from tests.gateway.test_busy_followup_after_session_release import _QueueRunner
 
 
-class _AdmissionRunner(GatewayInboundMixin, _QueueRunner):
+class _AdmissionRunner(_QueueRunner):
     def __init__(self, adapter):
         super().__init__(adapter)
         self._draining = False
-        self._is_user_authorized_for_source = lambda source: True
-        self._admit_bot_message_for_source = lambda source: True
-        self._effective_busy_input_mode = lambda source: "queue"
-        self._effective_busy_text_mode = lambda source: "interrupt"
+        self._busy_text_mode = "interrupt"
         self._route_plaintext_approval_while_busy = AsyncMock(return_value=False)
         self._resolve_busy_steer_or_redirect = AsyncMock()
         self._resolve_busy_steer_or_redirect.return_value.effective_mode = "queue"
         self._resolve_busy_steer_or_redirect.return_value.steered = False
         self._resolve_busy_steer_or_redirect.return_value.redirected = False
         self._send_busy_reply = AsyncMock()
+
+    def _is_user_authorized_for_source(
+        self, source: SessionSource, *, allow_adapter_delegation: bool = True
+    ) -> bool:
+        return True
+
+    def _admit_bot_message_for_source(self, source: SessionSource) -> bool:
+        return True
+
+    def _effective_busy_input_mode(self, source: SessionSource) -> str:
+        return "queue"
+
+    def _effective_busy_text_mode(self, source: SessionSource) -> str:
+        return self._busy_text_mode
 
 
 def _events(adapter, runner):
@@ -244,7 +255,7 @@ async def test_queue_receipts_and_refusals_preserve_event_context(path, monkeypa
                 await admit_internal_event(adapter, event)
         else:
             if path == "debounce":
-                runner._effective_busy_text_mode = lambda source: "queue"
+                runner._busy_text_mode = "queue"
             await adapter.handle_message(event)
         notices = runner._send_busy_reply.await_args_list
         assert (_events(adapter, runner), event._gateway_accepted,
