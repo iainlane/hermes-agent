@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 def _redacted_event_id(event: Any) -> str:
     """The event ID that an ``m.room.redaction`` event redacts, or an empty string."""
     content = event.get("content") if isinstance(event, dict) else getattr(event, "content", None)
+    if isinstance(event, dict) and content is not None and not isinstance(content, dict):
+        return ""
     target = event.get("redacts") if isinstance(event, dict) else getattr(event, "redacts", None)
     # Room version 11 moved ``redacts`` into the content.
     return str(target or (content.get("redacts") if content else None) or "")
