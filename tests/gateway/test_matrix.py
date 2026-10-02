@@ -10,7 +10,7 @@ import pytest
 from unittest.mock import MagicMock, patch, AsyncMock, call
 
 from gateway.config import Platform, PlatformConfig
-from gateway.platforms.event import MessageType, TurnContextUpdate
+from gateway.platforms.event import MessageEvent, MessageType, TurnContextUpdate
 from tests.gateway.matrix_helpers import FakeMediaDownload
 
 
@@ -4588,9 +4588,9 @@ class TestMatrixImageOnlyMediaNormalization:
 
     @pytest.mark.asyncio
     async def test_image_only_filename_body_is_not_forwarded_as_text(self):
-        captured_event = None
+        captured_event: MessageEvent | None = None
 
-        async def capture(msg_event):
+        async def capture(msg_event: MessageEvent) -> None:
             nonlocal captured_event
             captured_event = msg_event
 
@@ -4612,6 +4612,7 @@ class TestMatrixImageOnlyMediaNormalization:
         )
 
         event = captured_event
+        assert event is not None
         assert (event.text, event.message_type, event.media_types) == ("", MessageType.PHOTO, ["image/png"])
         assert [Path(path).read_bytes() for path in event.media_urls] == [self.download.body]
 
@@ -5107,9 +5108,9 @@ class TestMatrixInboundMediaDownloadFailure:
     async def test_media_download_failure_reaches_agent_as_marker(
         self, msgtype, source_content, relates_to, download, expected_text, expected_reply_to, expected_downloads,
     ):
-        captured_event = None
+        captured_event: MessageEvent | None = None
 
-        async def capture(msg_event):
+        async def capture(msg_event: MessageEvent) -> None:
             nonlocal captured_event
             captured_event = msg_event
 
@@ -5127,6 +5128,7 @@ class TestMatrixInboundMediaDownloadFailure:
         )
 
         event = captured_event
+        assert event is not None
         assert (
             event.text, event.message_type, event.media_urls, event.media_types, event.reply_to_message_id,
             download.await_count,
@@ -6418,29 +6420,32 @@ class TestMatrixInboundEventTimestamp:
         pytest.param(float("inf"), _TIMESTAMP_TEST_NOW, id="infinite"),
     ])
     async def test_message_event_timestamp(self, route, msgtype, body, timestamp_ms, expected):
-        from mautrix.types import Event
+        import json
 
-        content = {"msgtype": msgtype, "body": body}
+        from mautrix.types.event.message import MessageEvent as MatrixMessageEvent
+
+        content: dict[str, object] = {"msgtype": msgtype, "body": body}
+        info: dict[str, str | int] = {"mimetype": "application/octet-stream", "size": 7}
         if route not in {"text", "emote"}:
             content["url"] = "mxc://example.org/photo"
-            content["info"] = {"mimetype": "application/octet-stream", "size": 7}
+            content["info"] = info
             FakeMediaDownload(b"content", fail=route == "failed").install(self.adapter._client)
         if route == "oversized":
             self.adapter._inbound_media_limit = lambda: 6
         if route == "sticker":
-            content["info"]["mimetype"] = "image/png"
+            info["mimetype"] = "image/png"
             import io
             from PIL import Image
 
             png = io.BytesIO()
             Image.new("RGB", (1, 1)).save(png, format="PNG")
-            content["info"]["size"] = len(png.getvalue())
+            info["size"] = len(png.getvalue())
             FakeMediaDownload(png.getvalue()).install(self.adapter._client)
-        event = Event.deserialize({
+        event = MatrixMessageEvent.parse_json(json.dumps({
             "type": "m.sticker" if route == "sticker" else "m.room.message",
             "room_id": "!room:example.org", "sender": "@alice:example.org",
             "event_id": "$timestamp", "origin_server_ts": timestamp_ms, "content": content,
-        })
+        }))
 
         await self.adapter._on_room_message(event)
 
