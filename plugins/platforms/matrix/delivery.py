@@ -48,7 +48,7 @@ class _RoomIdentityResolver(Protocol):
 
 class MatrixDeliveryMixin:
     _client: Any
-    _user_id: str | None
+    _user_id: str
     _joined_rooms: set[str]
     _encryption: bool
     _e2ee_mode: str

@@ -325,12 +325,11 @@ def _seed_cron_channel_session(
         return False
 
 
-def _resolved_destination_unchanged(t: _TargetDelivery) -> bool:
+def _resolved_destination_unchanged(t: _TargetDelivery, source: SessionSource) -> bool:
     """Whether the resolved destination still has the chat type it had before sending. The
     seeds and the mirror use that chat type, so a changed or unconfirmed one skips them."""
     from cron.scheduler_delivery_destination import resolve_live_destination
 
-    source = t.resolved_source
     reason = None
     if source.chat_type == "unknown":
         reason = "the destination's chat type is unconfirmed"
@@ -361,7 +360,7 @@ def _seed_live_delivery_sessions(t: _TargetDelivery, delivered_message_id) -> No
     )
     bookkeeping = t.mirror_text.strip() and (
         seed_thread_id or t.mirror_this_target or (t.in_channel_surface and t.inchannel_continuable))
-    if bookkeeping and t.resolved_source is not None and not _resolved_destination_unchanged(t):
+    if bookkeeping and t.resolved_source is not None and not _resolved_destination_unchanged(t, t.resolved_source):
         return
     seed_kwargs = dict(
         chat_name=origin.get("chat_name"), is_dm=t.is_dm_target, scope_id=origin.get("scope_id"))
