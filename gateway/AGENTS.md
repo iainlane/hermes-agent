@@ -259,3 +259,5 @@ tests, not in prose.
 
 Matrix room identity reads are defined in `plugins/platforms/matrix/context_mixin.py`;
 formatted HTML helpers are defined in `plugins/platforms/matrix/rendering.py`.
+Matrix connection, sync checkpoints and disconnect cleanup are defined in
+`plugins/platforms/matrix/intake_mixin.py`.

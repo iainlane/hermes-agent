@@ -1261,163 +1261,14 @@ class MatrixAdapter(MatrixInboundEventMixin, MatrixMediaMixin, MatrixInvitesMixi
                             "Matrix: cross-signing bootstrap failed (non-fatal — Element will show "
                             "'not verified by its owner'): %s", exc)
 
-    async def _connect_initial_sync(self, client: Any) -> None:
-        """Full initial sync: seed joined rooms, DM cache, and dispatch queued to-device events."""
-        try:
-            since = await client.sync_store.get_next_batch()
-            self._resuming_sync = bool(since)
-            try:
-                sync_data = await client.sync(since=since, timeout=10000, full_state=True)
-            except Exception as exc:
-                if not since or not is_invalid_sync_cursor(exc):
-                    raise
-                logger.warning("Matrix: saved sync cursor was rejected; refreshing full state")
-                # A full sync returns recent history that was handled before the restart.
-                self._resuming_sync = False
-                sync_data = await client.sync(timeout=10000, full_state=True)
-            if isinstance(sync_data, dict):
-                self._joined_rooms.clear()
-                await self._absorb_sync(client, sync_data, initial=True)
-            else:
-                raise TypeError(f"Matrix: initial sync returned unexpected type {type(sync_data).__name__}")
-        except Exception as exc:
-            logger.warning("Matrix: initial sync error: %s", exc)
-            raise
+
+
 
     async def connect(self, *, is_reconnect: bool = False) -> bool:
-        self._device_id_unverified = False
-        if self._client is not None:
-            try:
-                await self.disconnect()
-            except Exception as exc:
-                logger.warning("Matrix: error disconnecting before reconnect: %s", exc)
-        from mautrix.api import HTTPAPI
-        from mautrix.client.state_store import MemoryStateStore, MemorySyncStore
-        if not self._homeserver:
-            logger.error("Matrix: homeserver URL not configured")
-            return False
-        # Resolved here, inside the profile scope, so multiplexed profiles never share it.
-        store_dir = self._resolve_store_dir()
-        store_dir.mkdir(parents=True, exist_ok=True)
-        if self._followup_store_path().exists():
-            self._purge_expired_watches()
-        client_session = _create_matrix_session(self._proxy_url)
-        api = HTTPAPI(base_url=self._homeserver, token=self._access_token or "", client_session=client_session)
-        state_store = MemoryStateStore()
-        sync_store = MemorySyncStore()
-        client = create_sync_client(
-            mxid=UserID(self._user_id) if self._user_id else UserID(""), device_id=self._device_id or None,
-            api=api, state_store=state_store, sync_store=sync_store)
-        self._client = client
-        if not await self._connect_authenticate(client, api):
-            return False
-        sync_store = DurableSyncStore(
-            store_dir, self._homeserver, str(client.mxid), str(client.device_id or ""), str(api.token))
-        try:
-            await sync_store.load()
-        except OSError as exc:
-            logger.error("Matrix: could not read sync cursor: %s", exc)
-            await self.disconnect()
-            return False
-        client.sync_store = sync_store
-        dispatch = getattr(client, "hermes_sync", None)
-        self._sync_checkpoints = SyncCheckpoints(
-            sync_store, dispatch.dispatching_intakes if isinstance(dispatch, SyncDispatch) else frozenset)
-        self._sync_position = None
-        if self._encryption and not await self._connect_setup_e2ee(client, api, state_store):
-            return False
-        if self._encryption and getattr(client, "crypto", None) and isinstance(getattr(client, "hermes_sync", None), SyncDispatch):
-            from mautrix.client.encryption_manager import DecryptionDispatcher
-            client.remove_dispatcher(DecryptionDispatcher)
-            client.add_event_handler(EventType.ROOM_ENCRYPTED, client.hermes_sync.decrypt_sync_event, wait_sync=True)
-        from mautrix.client import InternalEventType as IntEvt
-        from mautrix.client.dispatcher import MembershipEventDispatcher
-        client.add_dispatcher(MembershipEventDispatcher)  # without this INVITE never fires
-        client.add_event_handler(EventType.ROOM_MESSAGE, self._on_room_message, wait_sync=True)
-        sticker_type = getattr(EventType, "STICKER", None)
-        if sticker_type is not None:
-            client.add_event_handler(sticker_type, self._on_room_message, wait_sync=True)
-        client.add_event_handler(EventType.REACTION, self._on_reaction, wait_sync=True)
-        client.add_event_handler(IntEvt.INVITE, self._on_invite, wait_sync=True)
-        redaction_type = getattr(EventType, "ROOM_REDACTION", None)
-        if redaction_type is not None:
-            client.add_event_handler(redaction_type, self._on_redaction, wait_sync=True)
-        for state_type_name in (
-            "ROOM_TOPIC", "ROOM_NAME", "ROOM_CANONICAL_ALIAS", "ROOM_MEMBER",
-            "ROOM_TOMBSTONE", "ROOM_ENCRYPTION", "ROOM_JOIN_RULES",
-            "ROOM_HISTORY_VISIBILITY",
-        ):
-            state_type = getattr(EventType, state_type_name, None)
-            if state_type is not None:
-                client.add_event_handler(state_type, self._on_room_state, wait_sync=True)
-        client.hermes_sync.intake_handlers = {self._on_room_message, self._on_reaction}
-        self._startup_ts = time.time()
-        self._reset_clock_skew_detector()  # a reconnect after an NTP fix starts clean
-        self._closing = False
-        self._wire_plugin_handlers(client)
-        try:
-            await self._connect_initial_sync(client)
-        except Exception:
-            await self.disconnect()
-            return False
-        if self._encryption and getattr(client, "crypto", None):
-            try:
-                await client.crypto.share_keys()
-            except Exception as exc:
-                logger.warning("Matrix: initial key share failed: %s", exc)
-        self._sync_task = asyncio.create_task(self._sync_loop())
-        self._mark_connected()
-        logger.info("Matrix: connected after initial dispatch checkpoint")
-        return True
+        return await self._connect_matrix(is_reconnect=is_reconnect)
 
     async def disconnect(self) -> None:
-        self._closing = True
-        purge = getattr(self, "_watch_purge_handle", None)
-        if purge is not None:
-            purge.cancel()
-            self._watch_purge_handle = None
-        for session_key in tuple(self._reaction_followup_actions):
-            self._discard_followup_action(session_key)
-        if self._sync_task and not self._sync_task.done():
-            self._sync_task.cancel()
-            try:
-                await self._sync_task
-            except (asyncio.CancelledError, Exception):
-                pass
-        dispatch = getattr(self._client, "hermes_sync", None)
-        if isinstance(dispatch, SyncDispatch):
-            await dispatch.cancel()
-        batch_tasks = tuple(self._pending_text_batch_tasks.values())
-        for task in batch_tasks:
-            task.cancel()
-        await asyncio.gather(*batch_tasks, return_exceptions=True)
-        for event_id, receipt in tuple(self._buffered_intakes.items()):
-            # A reconnect resumes from the saved cursor and must hand these events over again.
-            self._forget_processed_event(event_id)
-            receipt.cancel()
-        self._pending_text_batches.clear()
-        self._text_batch_intakes.clear()
-        if self._sync_checkpoints is not None:
-            await self._sync_checkpoints.cancel()
-        for tasks in (self._invite_join_tasks.values(), self._reaction_redaction_tasks):
-            pending = list(tasks)
-            for task in pending:
-                if not task.done():
-                    task.cancel()
-            if pending:
-                await asyncio.gather(*pending, return_exceptions=True)
-        self._invite_join_tasks.clear()
-        self._reaction_redaction_tasks.clear()
-        if getattr(self, "_crypto_db", None):
-            try:
-                await self._crypto_db.stop()
-            except Exception as exc:
-                logger.debug("Matrix: could not close crypto DB on disconnect: %s", exc)
-        if self._client:
-            with suppress(Exception):
-                await self._client.api.session.close()
-            self._client = None
-        logger.info("Matrix: disconnected")
+        await self._disconnect_matrix()
 
     async def send(
         self, chat_id: str, content: str, reply_to: Optional[str] = None,
@@ -1909,116 +1760,17 @@ class MatrixAdapter(MatrixInboundEventMixin, MatrixMediaMixin, MatrixInvitesMixi
         # run it off the event loop so voice uploads never stall the adapter.
         voice_metadata = await asyncio.to_thread(_matrix_voice_metadata_for_file, p) if is_voice else None
         return await self._upload_and_send(
-            room_id, p.read_bytes(), fname, mimetypes.guess_type(fname)[0] or "application/octet-stream", msgtype,
-            caption, reply_to, metadata, is_voice, voice_metadata)
-
-    async def _sync_loop(self) -> None:
-        client = self._client
-        next_batch = self._sync_position or await client.sync_store.get_next_batch()
-        while not self._closing:
-            try:
-                if await self._rewind_failed_intake(client):
-                    next_batch = self._sync_position
-                    await asyncio.sleep(5)
-                    continue
-                # 45s outer cap guards TCP-level hangs the 30s long-poll timeout cannot catch.
-                # mautrix raises on every non-2xx, so a non-dict here is never an error object.
-                sync_data = await asyncio.wait_for(client.sync(since=next_batch, timeout=30000), timeout=45.0)
-                if isinstance(sync_data, dict):
-                    next_batch = await self._absorb_sync(client, sync_data) or next_batch
-                    await asyncio.sleep(0)  # let fresh invite joins start before the next sync
-            except asyncio.CancelledError:
-                return
-            except Exception as exc:
-                if self._closing:
-                    return
-                # Detect permanent auth/permission failures. Transient 5xx outages must retry.
-                if _is_permanent_matrix_auth_error(exc):
-                    logger.error("Matrix: permanent auth error, stopping sync: %s", exc)
-                    return
-                if next_batch and is_invalid_sync_cursor(exc):
-                    try:
-                        await self._connect_initial_sync(client)
-                        next_batch = self._sync_position
-                        continue
-                    except Exception:
-                        if self._closing:
-                            return
-                logger.warning("Matrix: sync error: %s — retrying in 5s", exc)
-                await asyncio.sleep(5)
-
-    async def _rewind_failed_intake(self, client: Any) -> bool:
-        """Return to the persisted cursor after a buffered text batch failed to reach the gateway."""
-        checkpoints = self._sync_checkpoints
-        failed = checkpoints.take_failure() if checkpoints is not None else None
-        if failed is None:
-            return False
-        for event_id in failed:
-            self._forget_processed_event(event_id)
-        self._sync_position = await client.sync_store.get_next_batch()
-        self._resuming_sync = bool(self._sync_position)
-        logger.warning("Matrix: retrying buffered intake from the saved sync cursor in 5s")
-        return True
-
-    async def _absorb_sync(self, client: Any, sync_data: Dict[str, Any], *, initial: bool = False) -> Optional[str]:
-        """Apply one sync response: joined rooms, next_batch, event dispatch, pending invites. Returns next_batch.
-        The initial (full-state) sync also seeds the DM cache and dispatches so the OlmMachine sees
-        to-device key shares queued while offline."""
-        self._last_sync_ts = time.time()
-        rooms_join = sync_data.get("rooms", {}).get("join", {})
-        if rooms_join or initial:
-            self._joined_rooms.update(rooms_join.keys())
-            self._invalidate_room_identities()
-        nb = sync_data.get("next_batch")  # incremental syncs resume from here
-        if initial:
-            await self._refresh_dm_cache()
-        await self._dispatch_sync(sync_data)
-        self._schedule_pending_invite_joins(sync_data)
-        if nb:
-            dispatch = getattr(client, "hermes_sync", None)
-            store = client.sync_store
-            if isinstance(dispatch, SyncDispatch) and isinstance(store, DurableSyncStore):
-                seen, buffered = dispatch.take_intakes()
-                checkpoints = self._sync_checkpoints
-                if checkpoints is None or checkpoints.store is not store:
-                    checkpoints = self._sync_checkpoints = SyncCheckpoints(store, dispatch.dispatching_intakes)
-                await checkpoints.commit(nb, seen, buffered)
-            else:
-                await store.put_next_batch(nb)
-            if isinstance(dispatch, SyncDispatch):
-                dispatch.acknowledge()
-            self._sync_position = nb
-            self._resuming_sync = True
-        if initial:
-            logger.info("Matrix: initial dispatch checkpoint complete, joined %d rooms", len(self._joined_rooms))
-        return nb
-
-    async def _dispatch_sync(self, sync_data: Dict[str, Any]) -> None:
-        """Dispatch a sync response through the mautrix event machinery."""
-        client = self._client
-        if not client or not hasattr(client, "handle_sync"):
-            return
-        dispatch = getattr(client, "hermes_sync", None)
-        if isinstance(dispatch, SyncDispatch):
-            try:
-                await dispatch.dispatch_sync(sync_data)
-            finally:
-                for handler, event_id in dispatch.failed_sync_handlers:
-                    if handler in {self._on_room_message, self._on_reaction}:
-                        self._forget_processed_event(event_id)
-            return
-        tasks = client.handle_sync(sync_data)
-        if inspect.isawaitable(tasks):
-            tasks = await tasks
-        if tasks:
-            # return_exceptions=True: one failing handler must not drop its SIBLING events.
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            for result in results:
-                if isinstance(result, Exception):
-                    logger.warning("Matrix: event handler failed during sync dispatch: %s", result)
-            for result in results:
-                if isinstance(result, BaseException):
-                    raise result
+            room_id,
+            p.read_bytes(),
+            fname,
+            mimetypes.guess_type(fname)[0] or "application/octet-stream",
+            msgtype,
+            caption,
+            reply_to,
+            metadata,
+            is_voice,
+            voice_metadata,
+        )
 
     def _is_self_sender(self, sender: str) -> bool:
         """True if *sender* is the bot itself (case-insensitive: homeservers vary localpart case). With
