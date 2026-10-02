@@ -1744,9 +1744,11 @@ class TestSendMediaViaAdapter:
         from concurrent.futures import Future
 
         def fake_run_coro(coro, _loop):
-            coro.close()
             completed = Future()
-            completed.set_result(MagicMock(success=True))
+            try:
+                completed.set_result(asyncio.run(coro))
+            except Exception as exc:
+                completed.set_exception(exc)
             return completed
 
         with patch("asyncio.run_coroutine_threadsafe", side_effect=fake_run_coro):
