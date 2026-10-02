@@ -41,6 +41,8 @@ def strip_inbound_source_note(event: Any, message_text: Any) -> Any:
         return message_text
 
     source = getattr(event, "source", None)
+    if source is None:
+        return message_text
     if getattr(source, "platform", None) == Platform.DISCORD:
         note = discord_triggering_note(event.message_id)
     elif getattr(source, "platform", None) == Platform.MATRIX and source.source_permalink:

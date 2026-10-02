@@ -31,6 +31,7 @@ logger = logging.getLogger("plugins.platforms.matrix.adapter")
 
 class MatrixIntakeMixin(BasePlatformAdapter):
     _client: Any
+    _require_mention: bool
     _read_receipts_mode: ReadReceiptMode
     _event_context_cache: MatrixEventContextCache
     _parked_voices: ParkedVoices
