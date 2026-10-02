@@ -1,9 +1,14 @@
 """The identity of messages removed by an authenticated platform notification."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from gateway.config import Platform
-from gateway.platforms.event import MessageEvent
+
+if TYPE_CHECKING:
+    from gateway.platforms.event import MessageEvent
 
 
 @dataclass(frozen=True)

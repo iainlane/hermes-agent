@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
 import sys
 from types import ModuleType
 from datetime import datetime
@@ -28,6 +29,19 @@ def _use_installed_discord_sdk():
             if name in sys.modules and not isinstance(sys.modules[name], ModuleType):
                 patch.delitem(sys.modules, name)
         yield
+
+
+def test_native_deletion_domain_imports_before_platform_modules():
+    result = subprocess.run(
+        [sys.executable, "-c", (
+            "from gateway.native_message_deletion import NativeMessageDeletion; "
+            "from gateway.platforms.event import MessageEvent"
+        )],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
 
 
 def _guild_payload() -> GuildPayload:
