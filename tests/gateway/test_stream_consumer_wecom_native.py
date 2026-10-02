@@ -1049,6 +1049,7 @@ class TestClarifyEagerReseed:
             "第二轮 eager seed 必须再发一个新的空 seed 帧 "
             f"(before={seeds_before_second_boundary}, after={seeds_after})"
         )
+        assert await _wait_until(lambda: consumer._native_stream_opened)
         assert consumer._reopen_seeded_eagerly is True
         assert consumer._awaiting_reopen_after_boundary is False
 
