@@ -1007,7 +1007,10 @@ from plugins.platforms.slack.inbound_context import SlackInboundContextMixin
 from plugins.platforms.slack.outbound_targets import SlackOutboundTargetsMixin
 
 
-class SlackAdapter(SlackOutboundTargetsMixin, SlackInboundContextMixin, BasePlatformAdapter):
+from plugins.platforms.slack.pending_replay import SlackPendingReplayMixin
+
+
+class SlackAdapter(SlackOutboundTargetsMixin, SlackPendingReplayMixin, SlackInboundContextMixin, BasePlatformAdapter):
     """Slack bot adapter (Socket Mode).
     Needs SLACK_BOT_TOKEN (xoxb-, API calls) and SLACK_APP_TOKEN (xapp-, Socket Mode). DMs +
     mention-gated channels, threads, attachments, slash commands, status text."""
