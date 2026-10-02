@@ -438,7 +438,7 @@ class GatewayInboundContextMixin:
         message_text = self._prepend_inbound_media_file_notes(message_text, audio_file_paths, video_paths)
         message_text = self._prepend_inbound_document_notes(event, message_text)
         redact_pii = False
-        if event.reply_to_text or (context_snapshot is not None and event.reply_to_message_id):
+        if event.reply_to_text or (context_snapshot is not None and event.reply_to_message_id) or source.source_permalink:
             from gateway.run import _load_gateway_config
 
             with suppress(Exception):
