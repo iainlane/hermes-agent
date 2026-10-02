@@ -10,6 +10,7 @@ from urllib.parse import unquote
 
 import pytest
 
+from gateway.hooks import ProfileHookRegistries
 from gateway.config import GatewayConfig, Platform, PlatformConfig
 from gateway.run import _AGENT_PENDING_SENTINEL, GatewayRunner
 from gateway.run_busy import GatewayBusySessionMixin
@@ -306,7 +307,9 @@ async def test_correction_reaches_the_turn_as_typed(monkeypatch, body, original_
     }
 
     await adapter._on_room_message(incoming)
-    event = adapter.handle_message.await_args.args[0]
+    awaited = adapter.handle_message.await_args
+    assert awaited is not None
+    event = awaited.args[0]
 
     assert (event.text, event.message_type, event.get_command(), await adapter.validate_inbound_event(event)) == (
         body, MessageType.TEXT, None, True,
@@ -343,7 +346,9 @@ async def test_lifecycle_reactions_appear_on_the_visible_message(monkeypatch, co
     adapter.handle_message = AsyncMock()
     if corrected:
         await adapter._on_room_message(edit_event())
-        event = adapter.handle_message.await_args.args[0]
+        awaited = adapter.handle_message.await_args
+        assert awaited is not None
+        event = awaited.args[0]
     else:
         event = await adapter._build_inbound_event(
             ROOM, ALICE, "$new", "question", {"msgtype": "m.text", "body": "question"}, {},
@@ -374,13 +379,17 @@ async def test_runner_queues_a_correction_that_arrives_without_the_adapter_guard
         "type": "m.room.message", "content": incoming.content,
     }
     await adapter._on_room_message(incoming)
-    correction = adapter.handle_message.await_args.args[0]
+    awaited = adapter.handle_message.await_args
+    assert awaited is not None
+    correction = awaited.args[0]
 
     runner = object.__new__(GatewayRunner)
     runner.config = GatewayConfig()
     runner.session_store = SessionStore(tmp_path / "sessions", runner.config)
     runner.adapters = {Platform.MATRIX: adapter}
-    runner.hooks = SimpleNamespace(emit=AsyncMock(), emit_collect=AsyncMock(return_value=[]), loaded_hooks=False)
+    runner.hooks = ProfileHookRegistries()
+    monkeypatch.setattr(runner.hooks, "emit", AsyncMock())
+    monkeypatch.setattr(runner.hooks, "emit_collect", AsyncMock(return_value=[]))
     monkeypatch.setattr(runner, "_is_user_authorized_for_source", lambda source: True)
     monkeypatch.setattr(runner, "_intake_adapter_for", lambda source: adapter)
     monkeypatch.setattr(runner, "_delivery_adapter_for", lambda source: adapter)
@@ -493,7 +502,9 @@ async def test_correction_policy_is_current_after_context_reads(monkeypatch, pha
         "type": "m.room.message", "content": incoming.content}
     if phase == "validation":
         await adapter._on_room_message(incoming)
-        pending = adapter.handle_message.await_args.args[0]
+        awaited = adapter.handle_message.await_args
+        assert awaited is not None
+        pending = awaited.args[0]
     async def changed_name(*args):
         if change == "sender":
             adapter.set_authorization_check(lambda *args, **kwargs: False)
@@ -536,7 +547,9 @@ async def test_correction_read_receipts_follow_the_configured_processing_policy(
     monkeypatch.setattr(adapter, "_background_read_receipt", lambda room, event: receipts.append((room, event)))
 
     await adapter._on_room_message(edit_event())
-    event = adapter.handle_message.await_args.args[0]
+    awaited = adapter.handle_message.await_args
+    assert awaited is not None
+    event = awaited.args[0]
     admitted_receipts = list(receipts)
     await adapter.on_processing_complete(event, outcome)
 
