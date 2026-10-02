@@ -237,3 +237,94 @@ async def test_native_withdrawal_requires_receiving_adapter_and_preserves_remain
         Platform.DISCORD, "guild", ROOM, ("removed",)))
     expected = [event for event in events if not (expected_found and event.message_id == "removed")]
     assert (found, read()) == (expected_found, expected)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("store", ["slot", "fifo"])
+async def test_withdrawn_priority_input_completes_before_adapter_teardown(monkeypatch, store):
+    from contextlib import suppress
+
+    from gateway.platforms.event import ProcessingOutcome
+    from tests.gateway.test_processing_lifecycle import _priority_runner, _running_slack_turn
+
+    runner, adapter = _priority_runner(monkeypatch, "queue")
+    adapter.gateway_runner = runner
+    adapter.set_queued_withdrawal_handler(runner._withdraw_queued_followups)
+    adapter._requeue_backoff_delay = lambda *_: 3600
+    source, key, _, _ = _running_slack_turn(runner, finished=False)
+    message_id = "deleted"
+    completed = asyncio.Event()
+    complete = adapter.on_processing_complete
+
+    async def completion(event, outcome):
+        await complete(event, outcome)
+        if event.message_id == message_id:
+            completed.set()
+
+    monkeypatch.setattr(adapter, "on_processing_complete", completion)
+    older = MessageEvent(text="older", source=source, message_id="older")
+    if store == "fifo":
+        runner._enqueue_fifo(key, older, adapter)
+    event = MessageEvent(text="queued input", source=source, message_id=message_id)
+    try:
+        await adapter.handle_message(event)
+        await asyncio.wait_for(asyncio.shield(adapter._session_tasks[key]), 30)
+        found = adapter.withdraw_pending_message(message_id, chat_id=source.chat_id, sender_id=source.user_id)
+        with suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(completed.wait(), 2)
+        queued = [*adapter._pending_messages.values(), *runner._session_state(key).conversation.queued_events]
+        lifecycle = [item for item in adapter.log if item[0] != "send"]
+        assert (found, queued, lifecycle, completed.is_set()) == (
+            True, [older] if store == "fifo" else [],
+            [("start", message_id), ("complete", message_id, ProcessingOutcome.CANCELLED)], True,
+        )
+    finally:
+        await adapter.cancel_background_tasks()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("store", ["slot", "reservation", "nested-slot", "nested-reservation"])
+@pytest.mark.parametrize("withdrawn", [("head",), ("middle",), ("head", "middle", "tail")])
+async def test_partial_withdrawal_completes_only_removed_started_constituents(monkeypatch, store, withdrawn):
+    from gateway.platforms.base_pending import reserve_pending_dispatch
+    from gateway.platforms.event import ProcessingOutcome
+    from tests.gateway.test_processing_lifecycle import _priority_runner, _running_slack_turn
+
+    runner, adapter = _priority_runner(monkeypatch, "queue")
+    adapter.set_queued_withdrawal_handler(runner._withdraw_queued_followups)
+    source, key, _, _ = _running_slack_turn(runner, finished=False)
+    events = [MessageEvent(text=identity, source=source, message_id=identity) for identity in ("head", "middle", "tail")]
+    try:
+        for event in events:
+            await adapter._run_processing_hook("on_processing_start", event)
+        runner._merge_into_pending_slot(adapter, key, events[0], merge_text=True)
+        if store.startswith("nested"):
+            batch_key = f"{key}:batch"
+            for event in events[1:]:
+                runner._merge_into_pending_slot(adapter, batch_key, event, merge_text=True)
+            runner._merge_into_pending_slot(adapter, key, adapter._pending_messages.pop(batch_key), merge_text=True)
+        else:
+            for event in events[1:]:
+                runner._merge_into_pending_slot(adapter, key, event, merge_text=True)
+        record = reserve_pending_dispatch(adapter, key, adapter._pending_messages.pop(key)) if store.endswith("reservation") else None
+        found = [adapter.withdraw_pending_message(identity, chat_id=source.chat_id, sender_id=source.user_id)
+                 for identity in withdrawn]
+        tasks = list(adapter._background_tasks)
+        if tasks:
+            await asyncio.wait_for(asyncio.gather(*tasks), 30)
+        before = [item for item in adapter.log if item[0] != "send"]
+        remaining = record.event if record is not None and not record.withdrawn else adapter._pending_messages.get(key)
+        survivors = [identity for identity in ("head", "middle", "tail") if identity not in withdrawn]
+        if remaining is not None:
+            await adapter._run_processing_hook("on_processing_start", remaining)
+            await adapter._run_processing_hook("on_processing_complete", remaining, ProcessingOutcome.SUCCESS)
+        after = [item for item in adapter.log if item[0] != "send"]
+        starts = [("start", identity) for identity in ("head", "middle", "tail")]
+        cancellations = [("complete", identity, ProcessingOutcome.CANCELLED) for identity in withdrawn]
+        successes = [("complete", identity, ProcessingOutcome.SUCCESS) for identity in survivors]
+        assert (found, remaining.text if remaining else None, before, sorted(after[len(starts):])) == (
+            [True] * len(withdrawn), "\n".join(survivors) if survivors else None,
+            starts + cancellations, sorted(cancellations + successes),
+        )
+    finally:
+        await adapter.cancel_background_tasks()

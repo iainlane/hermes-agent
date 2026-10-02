@@ -146,6 +146,8 @@ class _PendingDispatchReservation:
                 if hasattr(event, attr):
                     delattr(event, attr)
             setattr(event, "_gateway_pending_stt_echoed_paths", echoed.intersection(event.media_urls))
+        if remaining._processing_state.owner is remaining:
+            remaining._processing_state.hand_over(self.event)
         return True
 
 
@@ -391,6 +393,7 @@ class PendingWithdrawalMixin:
     _pending_text_batch_tasks: Dict[str, asyncio.Task]
     _pop_text_batch: Callable[[str], Optional[MessageEvent]]
     _text_debounce_store: Callable[[], Dict[str, Any]]
+    _withdraw_pending_event: Callable[[Any, Callable[[MessageEvent], bool]], Tuple[bool, Any]]
     # ``handler(adapter, withdraw)``, installed by the runner; see set_queued_withdrawal_handler.
     _queued_withdrawal_handler: Optional[Callable[[Any, Withdraw], bool]] = None
 
@@ -437,7 +440,7 @@ class PendingWithdrawalMixin:
 
     def _withdraw_pending_where(self, matches: Callable[[MessageEvent], bool]) -> bool:
         def withdraw(event: Any) -> Tuple[bool, Any]:
-            return withdraw_from_event(event, matches)
+            return self._withdraw_pending_event(event, matches)
 
         found = False
         for key in list(getattr(self, "_pending_dispatch_reservations", {})):
