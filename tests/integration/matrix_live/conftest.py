@@ -559,6 +559,11 @@ def gateway_extra_config() -> str:
 
 
 @pytest.fixture
+def gateway_auxiliary_config() -> str:
+    return ""
+
+
+@pytest.fixture
 def model_responder() -> Responder | None:
     return None
 
@@ -581,8 +586,8 @@ def matrix_feedback() -> MatrixFeedbackSettings:
 
 
 @pytest.fixture
-def gateway_busy_input_mode() -> str:
-    return "interrupt"
+def gateway_busy_input_mode() -> str | None:
+    return None
 
 
 @pytest.fixture
@@ -598,7 +603,7 @@ def gateway(
     gateway_auxiliary_config: str,
     model_responder: Responder | None,
     matrix_feedback: MatrixFeedbackSettings,
-    gateway_busy_input_mode: str,
+    gateway_busy_input_mode: str | None,
     gateway_delivery_probe: GatewayDeliveryProbe | None,
 ) -> Iterator[LiveGateway]:
     param = getattr(request, "param", GatewaySettings())
@@ -633,12 +638,13 @@ def gateway(
                 )
                 + ("auxiliary:\n  background_review:\n    enabled: false\n  title_generation:\n    model_upgrade_enabled: false\n"
                    if mode in {"inspection", "pause-image-context", "image-packs"} else "")
-                + ("display:\n  busy_input_mode: queue\n  busy_ack_enabled: false\n"
-                   if mode == "pause-queued-context" else "")
                 + ("plugins:\n  enabled:\n    - matrix-live-context\n"
                    if context_pause else "")
                 + ("plugins:\n  enabled:\n    - matrix-live-resolution\n" if resolution_pause else "")
-                + f"display:\n  busy_input_mode: {gateway_busy_input_mode}\n  busy_text_mode: interrupt\n"
+                + "display:\n"
+                + f"  busy_input_mode: {gateway_busy_input_mode or ('queue' if mode == 'pause-queued-context' else 'interrupt')}\n"
+                + f"  busy_text_mode: {'queue' if mode == 'pause-queued-context' else 'interrupt'}\n"
+                + ("  busy_ack_enabled: false\n" if mode == "pause-queued-context" else "")
                 + "approvals:\n  mode: manual\n  timeout: 15\n"
                 + gateway_extra_config
                 + gateway_auxiliary_config

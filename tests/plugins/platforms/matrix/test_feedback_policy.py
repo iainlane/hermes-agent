@@ -452,10 +452,13 @@ async def test_claimed_voice_receipts_include_the_triggering_mention(monkeypatch
 async def test_receipt_timing_follows_processing_outcome(monkeypatch, mode, outcome):
     monkeypatch.delenv("MATRIX_REACTIONS", raising=False)
     adapter = MatrixAdapter(
-        PlatformConfig(enabled=True, extra={"read_receipts": mode, "reactions": False})
+        PlatformConfig(enabled=True, extra={"read_receipts": mode, "reactions": False, "user_id": "@hermes:example.org"})
     )
     adapter._text_batch_delay_seconds = 0
     adapter._dm_rooms["!room:example.org"] = True
+    adapter._read_room_member_profiles = AsyncMock(
+        return_value=({adapter._user_id, "@alice:example.org"}, {})
+    )
     adapter._get_display_name = AsyncMock(return_value="Alice")
     adapter.handle_message = AsyncMock()
     adapter._background_read_receipt = MagicMock()
@@ -814,6 +817,9 @@ async def test_plaintext_approval_receipt_is_independent_of_the_active_turn(monk
     adapter._send_reaction = AsyncMock(return_value="$eyes")
     adapter._schedule_reaction_redaction = MagicMock()
     adapter._dm_rooms["!room:example.org"] = True
+    adapter._read_room_member_profiles = AsyncMock(
+        return_value=({adapter._user_id, "@alice:example.org"}, {})
+    )
     runner = _busy_runner(monkeypatch, adapter, "steer")
     opening = _receipt_event("opening")
     key = adapter._event_session_key(opening)
