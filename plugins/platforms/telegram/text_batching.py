@@ -7,7 +7,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from gateway.platforms.event import MessageEvent
-from gateway.platforms.base_pending import _can_join_pending_event, ingress_order
+from gateway.platforms.base_pending import can_join_pending_event, ingress_order
 
 if TYPE_CHECKING:
     from plugins.platforms.telegram.adapter import TelegramAdapter
@@ -32,7 +32,7 @@ class TelegramTextBatchingMixin:
         existing = self._pending_text_batches.get(key)
         if existing is not None and (
             not self._text_batch_context_compatible(existing, event)
-            or not _can_join_pending_event(existing, event)
+            or not can_join_pending_event(existing, event)
         ):
             prior_task = self._pending_text_batch_tasks.pop(key, None)
             if prior_task and not prior_task.done():
