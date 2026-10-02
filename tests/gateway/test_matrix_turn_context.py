@@ -1204,7 +1204,9 @@ async def test_unavailable_media_reaches_a_live_session_without_an_attachment(
             **attachment,
         }
         await adapter._handle_media_message(ROOM, SENDER, "$photo", 1000.0, content, {}, "m.image")
-        event = adapter.handle_message.await_args.args[0]
+        dispatch = adapter.handle_message.await_args
+        assert dispatch is not None
+        event = dispatch.args[0]
         runner = object.__new__(GatewayRunner)
         runner.config = GatewayConfig()
         runner.session_store = SessionStore(tmp_path / "sessions", runner.config)

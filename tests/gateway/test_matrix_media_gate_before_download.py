@@ -97,14 +97,15 @@ async def test_media_failure_preserves_admission_and_retained_reply_context(
     adapter._extract_reply_context = AsyncMock(return_value=MatrixReplyContext(
         "caption", "$parent", "earlier", "@bob:example.org", "Bob", False, True,
     ))
+    info: dict[str, str | int] = {"mimetype": "audio/ogg" if msgtype == "m.audio" else "text/plain"}
     content = {
         "msgtype": msgtype, "body": "caption", "filename": "report.txt",
-        "info": {"mimetype": "audio/ogg" if msgtype == "m.audio" else "text/plain"},
+        "info": info,
     }
     if scenario != "no-url":
         content["url"] = "mxc://example.org/file"
     if scenario == "declared-cap":
-        content["info"]["size"] = 5
+        info["size"] = 5
     result = await MatrixAdapter._handle_media_message(
         adapter, "!group:example.org", "@alice:example.org", "$attachment", 0.0,
         content, {"m.in_reply_to": {"event_id": "$parent"}}, msgtype,

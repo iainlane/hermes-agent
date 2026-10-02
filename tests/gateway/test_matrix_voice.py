@@ -18,7 +18,7 @@ try:
 except ImportError:
     pytest.skip("mautrix not installed", allow_module_level=True)
 
-from gateway.platforms.event import MessageType
+from gateway.platforms.event import MessageEvent, MessageType
 from tests.gateway.matrix_helpers import FakeMediaDownload
 
 
@@ -170,9 +170,9 @@ class TestMatrixVoiceCacheFailure:
 
         FakeMediaDownload(fail=True).install(self.adapter._client)
 
-        captured_event = None
+        captured_event: MessageEvent | None = None
 
-        async def capture(msg_event):
+        async def capture(msg_event: MessageEvent) -> None:
             nonlocal captured_event
             captured_event = msg_event
 
@@ -180,6 +180,7 @@ class TestMatrixVoiceCacheFailure:
 
         await self.adapter._on_room_message(event)
 
+        assert captured_event is not None
         assert (captured_event.text, captured_event.message_type, captured_event.media_urls) == (
             "Voice message\n[matrix audio attachment could not be downloaded]", MessageType.TEXT, [])
 
