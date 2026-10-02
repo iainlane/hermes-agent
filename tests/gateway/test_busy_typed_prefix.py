@@ -8,13 +8,12 @@ intercepts the command and Hermes never receives it. Platforms whose prefix is
 """
 
 import re
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
 import agent.onboarding
-from gateway.config import Platform
+from gateway.config import GatewayConfig, Platform
 from gateway.platforms.event import MessageEvent
 from gateway.run import GatewayRunner
 from gateway.session import SessionSource
@@ -28,17 +27,16 @@ _SLASH_COMMAND = re.compile(r"(?<=[\s`(])/(?=[a-z])")
 
 
 def _make_runner() -> GatewayRunner:
-    runner = object.__new__(GatewayRunner)
+    runner = GatewayRunner(config=GatewayConfig())
     from plugins.platforms.matrix.adapter import MatrixAdapter
     from plugins.platforms.slack.adapter import SlackAdapter
+    from plugins.platforms.telegram.adapter import TelegramAdapter
 
     runner.adapters = {
-        Platform.TELEGRAM: SimpleNamespace(typed_command_prefix="/"),
+        Platform.TELEGRAM: object.__new__(TelegramAdapter),
         Platform.MATRIX: object.__new__(MatrixAdapter),
         Platform.SLACK: object.__new__(SlackAdapter),
     }
-    runner.session_store = None
-    runner.config = None
     runner._running_agents = {}
     runner._busy_input_mode = "interrupt"
     return runner
@@ -52,7 +50,7 @@ def _make_event(platform: Platform, text: str) -> MessageEvent:
 async def _dispatch_busy_command(runner: GatewayRunner, event: MessageEvent) -> str:
     source = event.source
     quick_key = runner._session_key_for_source(source)
-    return await runner._dispatch_busy_slash_command(event, resolve_command(event.get_command()), quick_key, source)
+    return await runner._dispatch_busy_slash_command(event, resolve_command(event.get_command() or ""), quick_key, source)
 
 
 async def _refine_while_running(runner: GatewayRunner, event: MessageEvent) -> str:
@@ -70,7 +68,7 @@ async def _queued_behind_subagent_ack(runner: GatewayRunner, event: MessageEvent
 
 
 async def _busy_command(runner: GatewayRunner, event: MessageEvent) -> str:
-    return (await runner._handle_busy_command(event)).text
+    return str(await runner._handle_busy_command(event))
 
 
 @pytest.mark.asyncio
