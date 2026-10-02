@@ -18,6 +18,10 @@ from plugins.platforms.matrix.relations import MatrixRelation
 from plugins.platforms.matrix.reply_context import MatrixEventContext, MatrixEventContextCache, MatrixReplyContext, extract_mx_reply_quote, _label_body, _has_reply_fallback, _split_reply_fallback
 
 
+if TYPE_CHECKING:
+    from plugins.platforms.matrix.adapter import MatrixAdapter
+
+
 def _matrix_event_timestamp_seconds(event: Any) -> float:
     """Return a Matrix event timestamp in seconds, accepting ms or sec values."""
     try:
@@ -50,7 +54,7 @@ class MatrixInboundEventMixin(BasePlatformAdapter):
         return datetime.now(timezone.utc)
 
     async def _build_inbound_event(
-        self, room_id: str, sender: str, event_id: str, body: str, source_content: dict, relates_to: dict,
+        self: MatrixAdapter, room_id: str, sender: str, event_id: str, body: str, source_content: dict, relates_to: dict,
         ctx: Optional[tuple] = None, *, reply_parent: MatrixEventContext | None = None,
         event_ts: float = 0.0, reply_fallback: bool = True, **extra) -> Optional[MessageEvent]:
         """Gate + normalise an inbound event into a MessageEvent (None => drop). Text body may
@@ -120,7 +124,7 @@ class MatrixInboundEventMixin(BasePlatformAdapter):
             self._retain_rich_content(event, source_content, event_id, sender)
         return event
 
-    async def _on_room_message(self, event: Any) -> asyncio.Future[bool] | bool | None:
+    async def _on_room_message(self: MatrixAdapter, event: Any) -> asyncio.Future[bool] | bool | None:
         from plugins.platforms.matrix.adapter import _STARTUP_GRACE_SECONDS, logger
 
         room_id = str(getattr(event, "room_id", ""))
@@ -204,7 +208,7 @@ class MatrixInboundEventMixin(BasePlatformAdapter):
 
 
     async def _resolve_message_context(
-        self, room_id: str, sender: str, event_id: str, body: str, source_content: dict,
+        self: MatrixAdapter, room_id: str, sender: str, event_id: str, body: str, source_content: dict,
         relates_to: dict, mention_claimed: bool = False,
         voice_gate: Optional[VoiceGate] = None, *, allow_gateway_control: bool = True,
         reply_fallback: bool = True, record: bool = True) -> Optional[tuple]:
