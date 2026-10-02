@@ -866,7 +866,7 @@ async def test_teardown_completes_parked_messages_after_cancelling_and_flushing(
     adapter's tasks are cancelled and the slot is flushed to disk. A completion hook that never
     returns then cannot stop the cancellation or the flush, and no running chain can start the
     message again after it completed."""
-    import gateway.shutdown_flush as shutdown_flush
+    import gateway.shutdown_pending as shutdown_pending
 
     runner, _adapter = _priority_runner(monkeypatch, "queue")
     drain_tasks, flushed = [], []
@@ -879,8 +879,13 @@ async def test_teardown_completes_parked_messages_after_cancelling_and_flushing(
     await adapter.handle_message(MessageEvent(text="q1", source=source, message_id="queued-1"))
     await asyncio.wait_for(asyncio.shield(adapter._session_tasks[key]), 30)
     drain_tasks.extend(task for task in adapter._background_tasks if not task.done())
-    monkeypatch.setattr(shutdown_flush, "flush_pending_to_file",
-                        lambda pending, reason: flushed.extend(event.message_id for event in pending.values()))
+    write_snapshot = shutdown_pending._write_snapshot
+
+    def record_snapshot(owner, session_key, events):
+        write_snapshot(owner, session_key, events)
+        flushed.extend(event.message_id for event in events)
+
+    monkeypatch.setattr(shutdown_pending, "_write_snapshot", record_snapshot)
     monkeypatch.setattr(runner, "_adapter_disconnect_timeout_secs", lambda: 0.5)
 
     if entry == "runner-teardown":
