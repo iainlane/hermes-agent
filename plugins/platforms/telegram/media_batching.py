@@ -7,7 +7,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from gateway.platforms.event import MessageEvent
-from gateway.platforms.base_pending import _can_join_pending_event, merge_recorded, ingress_order
+from gateway.platforms.base_pending import can_join_pending_event, merge_recorded, ingress_order
 from gateway.platforms.base_pending_merge import _absorb_pending_media
 
 if TYPE_CHECKING:
@@ -77,7 +77,7 @@ class TelegramMediaBatchingMixin:
         if existing is None:
             pending[key] = event
             return
-        if not _can_join_pending_event(existing, event):
+        if not can_join_pending_event(existing, event):
             pending[key] = event
             self._hold_inbound_event(existing, where="media-reply-context-boundary")
             return

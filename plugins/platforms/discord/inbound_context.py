@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 from gateway.platforms.event import MessageEvent, MessageType
 from gateway.session import SessionSource
-from gateway.platforms.base_pending import _can_join_pending_event
+from gateway.platforms.base_pending import can_join_pending_event
 
 if TYPE_CHECKING:
     from plugins.platforms.discord.adapter import DiscordAdapter
@@ -392,7 +392,7 @@ class DiscordInboundContextMixin:
         if recovered or event.message_type != MessageType.TEXT or self._text_batch_delay_seconds <= 0:
             return None
         pending = self._pending_text_batches.get(self._text_batch_key(event))
-        return pending if pending is not None and _can_join_pending_event(pending, event) else None
+        return pending if pending is not None and can_join_pending_event(pending, event) else None
 
     def _batch_has_history_context(self: DiscordAdapter, event: MessageEvent, *, recovered: bool) -> bool:
         pending = self._pending_history_batch(event, recovered=recovered)
