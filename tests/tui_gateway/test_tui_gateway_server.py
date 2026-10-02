@@ -14757,6 +14757,7 @@ def test_interrupt_before_agent_ready_prevents_late_turn_start(monkeypatch):
     server._sessions["sid"] = session
 
     try:
+        monkeypatch.setattr(server, "_get_db", lambda: None)
         monkeypatch.setattr(server.threading, "Thread", _FakeThread)
         monkeypatch.setattr(server, "_emit", lambda *args, **kwargs: None)
         monkeypatch.setattr(server, "_ensure_session_db_row", lambda session: None)
@@ -14835,6 +14836,7 @@ def test_cancelled_turn_before_agent_ready_emits_error_event(monkeypatch):
     server._sessions["sid"] = session
 
     try:
+        monkeypatch.setattr(server, "_get_db", lambda: None)
         monkeypatch.setattr(server.threading, "Thread", _FakeThread)
         monkeypatch.setattr(server, "_emit", lambda *args, **kwargs: emitted.append(args))
         monkeypatch.setattr(server, "_ensure_session_db_row", lambda session: None)
@@ -14981,6 +14983,7 @@ def test_session_not_running_before_agent_ready_emits_error_event(monkeypatch):
     server._sessions["sid"] = session
 
     try:
+        monkeypatch.setattr(server, "_get_db", lambda: None)
         monkeypatch.setattr(server.threading, "Thread", _FakeThread)
         monkeypatch.setattr(server, "_emit", lambda *args, **kwargs: emitted.append(args))
         monkeypatch.setattr(server, "_ensure_session_db_row", lambda session: None)
@@ -15067,6 +15070,7 @@ def test_slow_agent_build_delivers_prompt_instead_of_timing_out(monkeypatch):
     session["agent_ready"] = _SlowReady()
 
     try:
+        monkeypatch.setattr(server, "_get_db", lambda: None)
         monkeypatch.setattr(server.threading, "Thread", _FakeThread)
         monkeypatch.setattr(server, "_emit", lambda *args, **kwargs: emitted.append(args))
         monkeypatch.setattr(server, "_ensure_session_db_row", lambda session: None)
@@ -15140,6 +15144,7 @@ def test_slow_agent_build_emits_keyed_progress_notice(monkeypatch):
     session["agent_ready"] = _SlowReady()
 
     try:
+        monkeypatch.setattr(server, "_get_db", lambda: None)
         monkeypatch.setattr(server.threading, "Thread", _FakeThread)
         # Every wait slice lands past the slow threshold.
         monkeypatch.setattr(server, "_AGENT_BUILD_SLOW_NOTICE_AFTER", 0.0)
@@ -15214,6 +15219,7 @@ def test_agent_build_failure_surfaces_error_and_drops_turn(monkeypatch):
         session["agent_ready"].set()
 
     try:
+        monkeypatch.setattr(server, "_get_db", lambda: None)
         monkeypatch.setattr(server.threading, "Thread", _FakeThread)
         monkeypatch.setattr(server, "_emit", lambda *args, **kwargs: emitted.append(args))
         monkeypatch.setattr(server, "_ensure_session_db_row", lambda session: None)
