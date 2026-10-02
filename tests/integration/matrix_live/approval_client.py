@@ -104,7 +104,7 @@ async def exercise(room_id: str, bot_device: str, other_login: dict[str, str], d
             refusal = next(event for event in events.values() if "Only the user who requested" in event.body)
             expected_feedback_relation = {
                 "rel_type": "m.thread", "event_id": anchors["first"]["root"],
-                "is_falling_back": True, "m.in_reply_to": {"event_id": first.event_id},
+                "is_falling_back": False, "m.in_reply_to": {"event_id": first.event_id},
             }
             assert refusal.source["content"]["m.relates_to"] == expected_feedback_relation, refusal.source
             await send(owner, {"m.relates_to": {"rel_type": "m.annotation", "event_id": first.event_id, "key": "👍"}}, "m.reaction")

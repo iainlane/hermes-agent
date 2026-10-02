@@ -61,8 +61,9 @@ async def _split_followup(tmp_path):
 async def test_split_logical_reply_survives_restart_with_delivery_order(tmp_path):
     adapter, event, runner, ids, parts, final = await _split_followup(tmp_path)
     prompt = await runner._prepare_inbound_message_text(event=event, source=event.source, history=[])
+    excerpt = final[:REPLY_EXCERPT_CHARS].replace("\n", "\\n")
     assert prompt == (
-        f'[Replying to your previous message: "{final[:REPLY_EXCERPT_CHARS]}"]\n\n'
+        f'[Replying to your previous message: "{excerpt}"]\n\n'
         f"Matrix reaction by {event.user_id}: 👍 on reply {ids[-1]} (reaction event $reaction)."
     )
     resolved = [unquote(call.args[1].rsplit("/", 1)[1]) for call in adapter._client.api.request.await_args_list
