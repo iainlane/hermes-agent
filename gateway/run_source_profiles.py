@@ -52,5 +52,3 @@ class GatewaySourceProfilesMixin:
                 source.platform.value, source.chat_id, getattr(source, "guild_id", None),
                 explicit_profile or "(no profile)", exc_info=True)
             return get_hermes_home()
-
-
