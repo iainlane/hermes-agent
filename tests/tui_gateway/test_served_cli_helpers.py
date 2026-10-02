@@ -7,8 +7,14 @@ import sys
 import hermes_yaml as yaml
 import pytest
 
+from tui_gateway.method_ctx import rebind
+from tui_gateway.methods_voice import _persist_wake_enabled
+from tui_gateway.model_switch import _session_profile_runtime_scope
+
 def test_drop_detection_keeps_cli_startup_state_out_of_served_profiles(tmp_path, monkeypatch):
     from tui_gateway import server
+
+    runtime_scope = rebind(_session_profile_runtime_scope, vars(server))
 
     home = tmp_path / ".hermes"
     secondary = home / "profiles" / "worker"
@@ -26,7 +32,7 @@ def test_drop_detection_keeps_cli_startup_state_out_of_served_profiles(tmp_path,
         session = {"agent": None, "profile_home": str(profile), "session_key": sid,
                    "attached_images": [], "image_counter": 0}
         monkeypatch.setitem(server._sessions, sid, session)
-        with server._session_profile_runtime_scope(session):
+        with runtime_scope(session):
             response = server._methods["input.detect_drop"](index, {"session_id": sid, "text": str(image)})
         assert "error" not in response, response
         observed.append((response["result"]["path"], "cli" in sys.modules, os.environ.get("HERMES_QUIET")))
@@ -43,6 +49,9 @@ def test_served_config_writes_and_delegation_reads_keep_profile_scope(
     from hermes_constants import get_hermes_home
     from tools.delegate_tool_config import _load_config
     from tui_gateway import server
+
+    runtime_scope = rebind(_session_profile_runtime_scope, vars(server))
+    persist_wake = rebind(_persist_wake_enabled, vars(server))
 
     home = tmp_path / ".hermes"
     secondary = home / "profiles" / "worker"
@@ -62,8 +71,8 @@ def test_served_config_writes_and_delegation_reads_keep_profile_scope(
     try:
         for index, path in enumerate((home, secondary, home)):
             session = {"profile_home": str(path), "session_key": f"config-helper-{index}"}
-            with server._session_profile_runtime_scope(session):
-                written = server._persist_wake_enabled(True)
+            with runtime_scope(session):
+                written = persist_wake(True)
                 limit = _load_config()["max_iterations"]
                 saved = yaml.safe_load((path / "config.yaml").read_text())
             observed.append((path, written, saved["wake_word"], limit))

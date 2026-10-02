@@ -9,6 +9,10 @@ from types import SimpleNamespace
 import hermes_yaml as yaml
 import pytest
 
+from tui_gateway.compute_host_bridge import _session_uses_compute_host
+from tui_gateway.method_ctx import rebind
+from tui_gateway.model_switch import _session_profile_runtime_scope
+
 
 @pytest.mark.parametrize("active", [False, True])
 @pytest.mark.parametrize("action,target,expected", [
@@ -23,6 +27,9 @@ def test_isolated_tools_update_only_the_owning_profile_and_conversation(
     from hermes_constants import get_hermes_home
     from hermes_state import SessionDB
     from tui_gateway import server
+
+    runtime_scope = rebind(_session_profile_runtime_scope, vars(server))
+    uses_compute_host = rebind(_session_uses_compute_host, vars(server))
     from tui_gateway.compute_host import ComputeHost
 
     home = tmp_path / ".hermes"
@@ -51,7 +58,8 @@ def test_isolated_tools_update_only_the_owning_profile_and_conversation(
     observed = []
     token = set_multiplex_context(True)
     stores = []
-    host = ComputeHost(stdout=io.StringIO(), heartbeat_secs=0)
+    stdout = io.StringIO()
+    host = ComputeHost(stdout=stdout, heartbeat_secs=0)
     try:
         for index, path in enumerate((home, secondary, home)):
             (path / "config.yaml").write_text(yaml.safe_dump(config))
@@ -73,11 +81,11 @@ def test_isolated_tools_update_only_the_owning_profile_and_conversation(
                     child_scope.setenv("HERMES_COMPUTE_HOST_CHILD", "1")
                     child_scope.setitem(server._sessions, sid, child)
                     host._handle_control({"sid": sid, "request_id": index, "route_name": route_name, **payload})
-                return json.loads(host._stdout.getvalue().splitlines()[-1])
+                return json.loads(stdout.getvalue().splitlines()[-1])
 
             monkeypatch.setattr(server, "_send_compute_host_control", send_control)
-            with server._session_profile_runtime_scope(session):
-                assert server._session_uses_compute_host(session)
+            with runtime_scope(session):
+                assert uses_compute_host(session)
                 response = server._methods["slash.exec"](index, {
                     "session_id": sid, "command": f"/tools {action} {target}"})
             assert "error" not in response, response
@@ -107,6 +115,8 @@ def test_isolated_tools_read_noop_and_busy_paths_preserve_the_conversation(
 ):
     from tui_gateway import server
 
+    runtime_scope = rebind(_session_profile_runtime_scope, vars(server))
+
     home = tmp_path / ".hermes"
     home.mkdir()
     monkeypatch.setenv("HERMES_HOME", str(home))
@@ -118,7 +128,7 @@ def test_isolated_tools_read_noop_and_busy_paths_preserve_the_conversation(
                "session_key": "preserved-tools", "history": history,
                "history_lock": threading.Lock(), "history_version": 3, "running": busy}
     monkeypatch.setitem(server._sessions, "preserved-tools", session)
-    with server._session_profile_runtime_scope(session):
+    with runtime_scope(session):
         response = server._methods["slash.exec"](1, {"session_id": "preserved-tools", "command": command})
     result = response.get("result") or {}
     assert {"error": (response.get("error") or {}).get("code"),

@@ -16,7 +16,7 @@ import time
 from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional, cast
+from typing import Any, Awaitable, Callable, Dict, Iterable, Optional, cast
 
 from agent.i18n import t
 from gateway.config import Platform, _BUILTIN_PLATFORM_VALUES
@@ -97,6 +97,9 @@ def _raw_process_event_session_id(evt: dict) -> str:
 
 class GatewayNotificationsMixin:
     """Process/completion/update notifications, media delivery and async-delegation delivery for GatewayRunner."""
+
+    _home_channel_transports: Callable[[], Iterable[tuple]]
+    _send_home_channel_message: Callable[..., Awaitable[bool]]
 
     # Coalescing keys: process completions (short-window fan-in) and async delegations (+ parent session).
     _COMPLETION_BATCH_KEY_FIELDS = ("session_key", "platform", "chat_type", "chat_id", "thread_id", "user_id")

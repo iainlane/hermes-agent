@@ -48,18 +48,18 @@ def notice_profiles(tmp_path, monkeypatch):
     observations = []
     bots = {name: _NoticeAdapter(name, observations) for name in homes}
     runner, _ = make_restart_runner(bots["default"])
-    runner.configs = {}
+    configs = {}
     for name, home in homes.items():
         with gateway_run._profile_runtime_scope(home):
-            runner.configs[name] = load_gateway_config()
-    runner.config = runner.configs["default"]
+            configs[name] = load_gateway_config()
+    runner.config = configs["default"]
     runner.config.multiplex_profiles = True
     runner._primary_profile_name = "default"
-    runner._profile_configs = {name: runner.configs[name] for name in ("a", "b")}
+    runner._profile_configs = {name: configs[name] for name in ("a", "b")}
     runner._profile_adapters = {name: {Platform.TELEGRAM: bots[name]} for name in ("a", "b")}
     runner._served_profile_homes = homes
     try:
-        yield runner, homes, languages, bots, observations
+        yield runner, homes, languages, bots, observations, configs
     finally:
         i18n.reset_language_cache()
         secret_scope.set_multiplex_active(False)
@@ -68,7 +68,7 @@ def notice_profiles(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scenario", ["distinct", "shared", "primary-opt-out", "free-tier", "scope-failure"])
 async def test_startup_notice_uses_first_eligible_target_owner(notice_profiles, monkeypatch, scenario):
-    runner, homes, languages, bots, observations = notice_profiles
+    runner, homes, languages, bots, observations, configs = notice_profiles
 
     def expected(name):
         with gateway_run._profile_runtime_scope(homes[name]):
@@ -97,14 +97,14 @@ async def test_startup_notice_uses_first_eligible_target_owner(notice_profiles, 
     if scenario in {"distinct", "free-tier", "scope-failure"}:
         runner.config.platforms[Platform.TELEGRAM].home_channel = None
         for name in ("a", "b", "a"):
-            runner._profile_configs = {name: runner.configs[name]}
+            runner._profile_configs = {name: configs[name]}
             targets = set() if scenario == "scope-failure" and name == "a" else {(f"{name}:telegram", name, None)}
             assert await runner._send_home_channel_startup_notifications() == targets
         owners = ["b"] if scenario == "scope-failure" else ["a", "b", "a"]
         assert observations == [(name, homes[name], expected(name), name) for name in owners]
         return
 
-    for cfg in runner.configs.values():
+    for cfg in configs.values():
         cfg.platforms[Platform.TELEGRAM].home_channel.chat_id = "-42"
     owner = "default"
     if scenario == "primary-opt-out":
@@ -122,7 +122,7 @@ async def test_startup_notice_uses_first_eligible_target_owner(notice_profiles, 
 async def test_routed_restart_notice_uses_runtime_language_and_receiving_bot(
     notice_profiles, runtime_has_bot,
 ):
-    runner, homes, languages, bots, observations = notice_profiles
+    runner, homes, languages, bots, observations, configs = notice_profiles
     runner.request_restart = MagicMock(return_value=True)
     if not runtime_has_bot:
         runner._profile_adapters = {name: {} for name in ("a", "b")}
@@ -139,7 +139,7 @@ async def test_routed_restart_notice_uses_runtime_language_and_receiving_bot(
             text = i18n.t("gateway.startup.restarted")
         expected.append(("default", homes[runtime], text, "42"))
         assert observations == expected
-    runner.configs["b"].platforms[Platform.TELEGRAM].gateway_restart_notification = False
+    configs["b"].platforms[Platform.TELEGRAM].gateway_restart_notification = False
     source = bots["default"].build_source(chat_id="42", chat_type="dm", user_id="42")
     source.profile = "b"
     resolve_identity(source, runner=runner, adapter=bots["default"], transport_profile="default")

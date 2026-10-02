@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from contextlib import AbstractContextManager
 import json
 import logging
-from typing import Optional
+from typing import Callable, Optional
 
 from agent.i18n import t
-from gateway.config import Platform
+from gateway.config import GatewayConfig, Platform
 from gateway.run_shutdown import _delivery_target_key, _log_suppressed, _notice_target_key, _send_error, _send_failed
 
 logger = logging.getLogger("gateway.run")
@@ -43,6 +44,11 @@ def _safe_delivery_transport(platform, config, adapters, *, profile: Optional[st
 
 
 class GatewayStartupNoticesMixin:
+    config: GatewayConfig
+    _standalone_launch_scope: Callable[[], AbstractContextManager]
+    _marker_profile: Callable[[dict], Optional[str]]
+    _pending_marker_metadata: Callable[..., Optional[dict]]
+
     @contextlib.asynccontextmanager
     async def _startup_notice_scope(self, profile: Optional[str]):
         if profile is None and not self.config.multiplex_profiles:

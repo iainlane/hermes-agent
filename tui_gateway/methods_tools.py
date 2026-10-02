@@ -9,6 +9,13 @@ import contextlib
 import sys
 from pathlib import Path
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .compute_host_bridge import _session_uses_compute_host
+    from .methods_tools_config import _tools_slash_request
+    from .server import _err
+
 from .method_ctx import HandlerRegistry, bind_module
 
 _registry = HandlerRegistry()

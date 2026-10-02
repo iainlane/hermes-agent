@@ -1,5 +1,6 @@
 """Stored completion origins use their runtime profile under a named launcher."""
 
+from collections import OrderedDict
 from pathlib import Path
 
 import pytest
@@ -30,7 +31,7 @@ async def test_stored_process_origins_use_their_runtime_store(tmp_path, monkeypa
     runner._primary_profile_name = "default"
     runner.adapters = {}
     runner._profile_adapters = {"worker": {}}
-    runner._agent_cache = {}
+    runner._agent_cache = OrderedDict()
     token = set_multiplex_context(True)
     observed = []
     stores = []
