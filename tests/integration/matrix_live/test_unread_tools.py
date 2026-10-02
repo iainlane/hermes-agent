@@ -19,14 +19,18 @@ from nio.responses import EmptyResponse
 
 from tests.fakes.fake_llm_provider import Text, ToolCall
 from tests.integration.matrix_live.conftest import (
-    LinuxNioObserver, LiveGateway, LiveRoom,
+    LinuxNioObserver, LiveGateway, LiveRoom, MatrixFeedbackSettings,
 )
 
 
 @pytest.fixture
 def gateway_config() -> str:
-    return "platforms:\n  matrix:\n    enabled: true\n    read_receipts: disabled\n    reactions: false\nupdates:\n  check: false\n"
+    return "platforms:\n  matrix:\n    enabled: true\nupdates:\n  check: false\n"
 
+
+@pytest.fixture
+def matrix_feedback() -> MatrixFeedbackSettings:
+    return MatrixFeedbackSettings(read_receipts="disabled", reactions=False)
 
 @pytest.fixture
 def gateway_auxiliary_config() -> str:
