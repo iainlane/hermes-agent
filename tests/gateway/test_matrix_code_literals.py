@@ -32,8 +32,8 @@ def test_complete_markdown_pipeline_preserves_code_and_removes_unsafe_raw_html(
             self.parts = []
             self.active_tags = []
 
-        def handle_data(self, text):
-            self.parts.append(text)
+        def handle_data(self, data: str) -> None:
+            self.parts.append(data)
 
         def handle_starttag(self, tag, attrs):
             if tag in {"script", "style"}:
