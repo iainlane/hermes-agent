@@ -9,6 +9,7 @@ from urllib.parse import quote
 
 from gateway.config import PlatformConfig
 from gateway.platforms.event import MessageEvent
+from plugins.platforms.matrix.adapter_feedback import ReadReceiptMode
 from plugins.platforms.matrix.client_events import Method
 from plugins.platforms.matrix.effective_event import (
     _decrypt, _encrypted_replacement_content, event_content,
@@ -34,6 +35,7 @@ class MatrixEditFollowupsMixin:
     _event_context_cache: Any
     _process_edits: frozenset[str]
     _process_notices: bool
+    _read_receipts_mode: ReadReceiptMode
     _threads: Any
     _background_read_receipt: Callable[[str, str], None]
     _build_inbound_event: Callable[..., Awaitable[MessageEvent | None]]
@@ -224,7 +226,8 @@ class MatrixEditFollowupsMixin:
             await self._threads.mark_async(thread_id)
         if not self._edit_policy_allows(room_id, sender, event_id, target, chat_type, notice=notice):
             return
-        self._background_read_receipt(room_id, event_id)
+        if self._read_receipts_mode == ReadReceiptMode.IMMEDIATE:
+            self._background_read_receipt(room_id, event_id)
         event._queue_at_turn_boundary = True
         event._pending_coalesce_key = ("matrix-edit", room_id, sender, target)
         await self.handle_message(event)
