@@ -549,7 +549,7 @@ async def test_room_that_stops_being_a_dm_before_the_write_is_refused(action, re
         members=(ACTOR, BOT), sender=ACTOR, chat_type="dm",
     )
 
-    async def is_dm(room_id):
+    async def is_dm(room_id, **_kwargs):
         return dm["dm"]
 
     adapter._is_dm_room = is_dm
