@@ -138,9 +138,10 @@ async def test_restored_slack_input_requires_current_native_source_and_cache(mon
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("authorization", ["current", "revoked"])
+@pytest.mark.parametrize("authorization", ["current", "revoked", "changed-cache"])
 @pytest.mark.parametrize("context_kind", ["own-file", "thread-root-file"])
-async def test_slack_restoration_uses_routed_files_and_persisted_user_receipts(tmp_path, monkeypatch, authorization, context_kind):
+@pytest.mark.parametrize("withdrawal", ["none", "earlier"])
+async def test_slack_restoration_uses_routed_files_and_persisted_user_receipts(tmp_path, monkeypatch, authorization, context_kind, withdrawal):
     import asyncio
     import hermes_state
     from agent.secret_scope import is_multiplex_active, set_multiplex_active
@@ -233,7 +234,7 @@ async def test_slack_restoration_uses_routed_files_and_persisted_user_receipts(t
             (launch / ".env").write_text("GATEWAY_ALLOWED_USERS=U333\nSLACK_ALLOW_ALL_USERS=false\n")
             ts = f"1000.{index:06d}"
             channel = "C555" if profile == "a" else "C556"
-            native = {"type": "message", "user": "U333", "channel": channel, "team": "T999", "ts": ts,
+            native: dict[str, Any] = {"type": "message", "user": "U333", "channel": channel, "team": "T999", "ts": ts,
                       "text": f"authored-{index}", "client_msg_id": f"input-{index}", "files": [{
                           "id": f"F77{index}", "name": "image.png", "size": len(png), "mimetype": "image/png",
                           "url_private_download": f"https://files.slack.com/files-pri/T999-F77{index}/image.png"}]}
@@ -245,10 +246,32 @@ async def test_slack_restoration_uses_routed_files_and_persisted_user_receipts(t
                                         "id": f"F88{index}", "name": "root.png", "size": len(png), "mimetype": "image/png",
                                         "url_private_download": f"https://files.slack.com/files-pri/T999-F88{index}/root.png"}]}
             current[ts] = native
-            with _profile_runtime_scope(homes[profile]):
+            with _profile_runtime_scope(launch):
                 event = await adapter._prepare_slack_message(deepcopy(native), "T999", channel)
                 assert event is not None
                 assert adapter._canonicalize(event.source) is not None
+                if withdrawal == "earlier":
+                    from gateway.platforms.base_pending import merge_recorded
+                    from gateway.platforms.base_pending_merge import _absorb_pending_media
+                    prior_native = deepcopy(native)
+                    prior_native.update(ts=f"998.{index:06d}", text=f"earlier-{index}")
+                    prior_native["files"][0]["id"] = f"F66{index}"
+                    prior_native["files"][0]["url_private_download"] = f"https://files.slack.com/files-pri/T999-F66{index}/prior.png"
+                    prior = await adapter._prepare_slack_message(prior_native, "T999", channel)
+                    assert prior is not None
+                    assert adapter._canonicalize(prior.source) is not None
+                    merge_recorded(prior, event, _absorb_pending_media)
+                    event = prior
+            with _profile_runtime_scope(homes[profile]):
+                from gateway.run_inbound_media import rehome_inbound_media
+                rehome_inbound_media(event)
+                if withdrawal == "earlier":
+                    from gateway.platforms.base_pending import withdraw_from_event
+                    matched, remaining = withdraw_from_event(event, lambda part: part.message_id == prior_native["ts"])
+                    assert matched and remaining is not None
+                    event = remaining
+                if authorization == "changed-cache":
+                    Path(event.media_urls[-1]).write_bytes(b"replacement at routed path")
                 entry = runner.session_store.get_or_create_session(event.source)
                 snapshot = PendingQueueSnapshot.capture(entry.session_key, [event])
                 path = homes[profile] / "pending_messages" / f"pending-{index}.json"
@@ -262,10 +285,19 @@ async def test_slack_restoration_uses_routed_files_and_persisted_user_receipts(t
                 await asyncio.wait_for(asyncio.gather(*tasks), timeout=5)
             if authorization == "current":
                 expected.append((ts, homes[profile], (png, png) if context_kind == "thread-root-file" else (png,), event.channel_context))
+            if authorization == "current":
                 expected_reads.append((ts, homes[profile]))
                 if context_kind == "thread-root-file":
                     expected_reads.append((root_ts, homes[profile]))
+            if authorization == "changed-cache":
+                for checked_profile in homes:
+                    for previous, previous_profile in enumerate(("a", "b", "a")[:index + 1]):
+                        if previous_profile != checked_profile:
+                            continue
+                        expected_reads.append((f"1000.{previous:06d}", homes[checked_profile]))
+                        if context_kind == "thread-root-file":
+                            expected_reads.append((f"999.{previous:06d}", homes[checked_profile]))
             assert (seen, reads, path.exists(), get_hermes_home()) == (
-                expected, expected_reads, authorization == "revoked", launch)
+                expected, expected_reads, authorization != "current", launch)
     finally:
         set_multiplex_active(active)
