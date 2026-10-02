@@ -44,13 +44,13 @@ async def test_shutdown_preserves_the_complete_ordered_pending_session(tmp_path,
     events[1].message_type, events[1].text = MessageType.PHOTO, ""
     events[1].media_urls, events[1].media_types, events[1].media_text_inlined = [str(tmp_path / "image.jpg")], ["image/jpeg"], [False]
     events[2].internal, events[2].allow_gateway_control = True, False
+    if reservation != "absent":
+        reserve_pending_dispatch(adapter, "shared", events[0])
+        adapter._pending_dispatch_reservations["shared"].claimed = reservation == "claimed"
     for event in events[1:3]:
         runner._enqueue_fifo("shared", event, adapter)
     for event in events[3:]:
         assert await adapter._queue_text_debounce("shared", event)
-    if reservation != "absent":
-        reserve_pending_dispatch(adapter, "shared", events[0])
-        adapter._pending_dispatch_reservations["shared"].claimed = reservation == "claimed"
     if reservation in {"cancel-before", "claim-during", "late-provisional"}:
         entered = asyncio.Event()
         async def handler(event):
@@ -294,7 +294,7 @@ async def test_pending_dispatch_preserves_only_inputs_without_durable_ownership(
     adapter = _make_initialized_adapter()
     runner = _QueueRunner(adapter)
     runner.session_store = SessionStore(launch / "sessions", GatewayConfig(multiplex_profiles=False))
-    monkeypatch.setattr(runner, "_profile_scope_for_source", lambda source: _profile_runtime_scope(homes[source.profile]), raising=False)
+    monkeypatch.setattr(runner, "_profile_scope_for_source", lambda source: _profile_runtime_scope(homes[source.profile]))
     adapter.gateway_runner = runner
     dbs = {profile: SessionDB(db_path=home / "state.db") for profile, home in homes.items()}
     try:
