@@ -9,7 +9,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from gateway.config import PlatformConfig
+from gateway.config import Platform, PlatformConfig
+from gateway.session import SessionSource
 
 
 
@@ -628,7 +629,10 @@ class TestTextBatchFlushRace:
         adapter._text_batch_delay_seconds = 0
 
         key = "test-session"
-        event = MessageEvent(text="hello", message_type=MessageType.TEXT)
+        event = MessageEvent(
+            text="hello", message_type=MessageType.TEXT,
+            source=SessionSource(platform=Platform.WECOM, chat_id="chat-1", user_id="user-1"),
+        )
         adapter._pending_text_batches[key] = event
 
         handle_calls = []
@@ -671,7 +675,10 @@ class TestTextBatchFlushRace:
         adapter._text_batch_delay_seconds = 0
 
         key = "test-session"
-        event = MessageEvent(text="world", message_type=MessageType.TEXT)
+        event = MessageEvent(
+            text="world", message_type=MessageType.TEXT,
+            source=SessionSource(platform=Platform.WECOM, chat_id="chat-1", user_id="user-1"),
+        )
         adapter._pending_text_batches[key] = event
 
         handle_calls = []
@@ -684,8 +691,7 @@ class TestTextBatchFlushRace:
         t1 = asyncio.create_task(adapter._flush_text_batch(key))
         adapter._pending_text_batch_tasks[key] = t1
 
-        # No superseding task — T1 should process normally.
-        await asyncio.sleep(0.05)
+        await asyncio.wait_for(t1, timeout=2)
 
         assert handle_calls == [event], "active task must call handle_message"
         assert adapter._pending_text_batches.get(key) is None, (
