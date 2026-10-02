@@ -72,6 +72,7 @@ def _can_join_pending_event(first: MessageEvent, second: MessageEvent) -> bool:
     return (
         same_message_sender(first, second)
         and _same_pending_security_context(first, second)
+        and first._pending_execution_owner == second._pending_execution_owner
         and not first.reply_context_conflicts(second)
     )
 
@@ -99,6 +100,7 @@ class _PendingDispatchReservation:
             return
         event._merged_parts = self.event._merged_parts
         event._pending_native_input = self.event._pending_native_input
+        event._pending_execution_owner = self.event._pending_execution_owner
         for attr in ("_pending_snapshot_uid", "_gateway_input_owner", "_gateway_pending_stt_text", "_gateway_pending_stt_transcripts",
                      "_gateway_pending_stt_clips", "_gateway_pending_stt_input", "_gateway_pending_stt_echoed_paths"):
             if hasattr(self.event, attr):
@@ -125,6 +127,7 @@ class _PendingDispatchReservation:
             event._merged_parts = remaining._merged_parts
             event._prepared_inbound = None
             event._pending_native_input = remaining._pending_native_input
+            event._pending_execution_owner = remaining._pending_execution_owner
             for attr in ("_gateway_pending_stt_text", "_gateway_pending_stt_transcripts", "_gateway_pending_stt_clips", "_gateway_pending_stt_input"):
                 if hasattr(event, attr):
                     delattr(event, attr)
@@ -344,7 +347,7 @@ def withdraw_from_event(event: Any, matches: Callable[[MessageEvent], bool]) -> 
     if not remaining:
         return True, None
     rebuilt = pending_part(remaining[0][0])
-    for attr in ("_pending_snapshot_uid", "_gateway_input_owner"):
+    for attr in ("_pending_snapshot_uid", "_gateway_input_owner", "_pending_execution_owner"):
         if hasattr(event, attr):
             setattr(rebuilt, attr, getattr(event, attr))
     for part, merge in remaining[1:]:
@@ -356,10 +359,13 @@ def withdraw_from_event(event: Any, matches: Callable[[MessageEvent], bool]) -> 
 
 
 class PendingWithdrawalMixin:
+    """``withdraw_pending_message`` for ``BasePlatformAdapter``."""
+
     def pending_native_input(self, event: MessageEvent) -> PendingNativeInput | None:
         return None
 
-    """``withdraw_pending_message`` for ``BasePlatformAdapter``."""
+    async def revalidate_pending_event(self, event: MessageEvent) -> MessageEvent | None:
+        return None
 
     platform: Any
     _pending_messages: Dict[str, MessageEvent]
