@@ -520,3 +520,33 @@ async def test_correction_policy_is_current_after_context_reads(monkeypatch, pha
         await adapter._on_room_message(incoming)
         accepted = bool(adapter.handle_message.await_args_list)
     assert accepted is (change == "unchanged")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["immediate", "after_processing", "disabled"])
+@pytest.mark.parametrize("outcome", list(ProcessingOutcome))
+async def test_correction_read_receipts_follow_the_configured_processing_policy(monkeypatch, mode, outcome):
+    from plugins.platforms.matrix.adapter_feedback import ReadReceiptMode
+
+    adapter = adapter_for(monkeypatch, {ROOM: True})
+    adapter._read_receipts_mode = ReadReceiptMode(mode)
+    adapter._reactions_enabled = False
+    adapter.handle_message = AsyncMock()
+    receipts = []
+    monkeypatch.setattr(adapter, "_background_read_receipt", lambda room, event: receipts.append((room, event)))
+
+    await adapter._on_room_message(edit_event())
+    event = adapter.handle_message.await_args.args[0]
+    admitted_receipts = list(receipts)
+    await adapter.on_processing_complete(event, outcome)
+
+    expected_admission = [(ROOM, "$edit")] if mode == "immediate" else []
+    expected_completion = (
+        [(ROOM, "$edit")]
+        if mode == "after_processing" and outcome != ProcessingOutcome.CANCELLED
+        else []
+    )
+    assert (event.metadata, event.receipt_message_id, admitted_receipts, receipts) == (
+        {"edited_message": True, "edited_message_original_id": "$original"},
+        "$edit", expected_admission, expected_admission + expected_completion,
+    )
