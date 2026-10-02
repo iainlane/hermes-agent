@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import sys
 import types
+from dataclasses import replace
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
 
@@ -25,7 +26,7 @@ from gateway.session import SessionEntry, SessionSource
 from gateway.turn_context import TurnContext
 
 KEY = "agent:main:discord:group:1513247605675790346:117431298246705156"
-_ORIGIN = dict(
+_ORIGIN = SessionSource(
     platform=Platform.DISCORD,
     chat_id="1513247605675790346",
     chat_type="group",
@@ -35,8 +36,8 @@ _ORIGIN = dict(
 
 
 def _human_source() -> SessionSource:
-    return SessionSource(
-        **_ORIGIN,
+    return replace(
+        _ORIGIN,
         chat_name="Guild / #general",
         user_name="Ace",
         message_id="1552671843494666330",
@@ -46,7 +47,7 @@ def _human_source() -> SessionSource:
 def _wake_source() -> SessionSource:
     # kanban_watchers._push_wake shape: rebuilt from the persisted origin, so
     # no chat_name / user_name / message_id.
-    return SessionSource(**_ORIGIN)
+    return replace(_ORIGIN)
 
 
 def _make_runner(
@@ -483,7 +484,7 @@ async def test_channel_override_turns_keep_one_cached_agent_and_the_pin(
 
     config = GatewayConfig()
     config.platforms[Platform.DISCORD] = PlatformConfig(
-        enabled=True, channel_overrides={_ORIGIN["chat_id"]: ChannelOverride(model="chan/model")},
+        enabled=True, channel_overrides={_ORIGIN.chat_id: ChannelOverride(model="chan/model")},
     )
     monkeypatch.setattr(gr, "_load_gateway_config", lambda: {"model": {"default": global_model}})
     monkeypatch.setattr(gr, "_resolve_gateway_model", lambda config=None: global_model)

@@ -24,6 +24,7 @@ explicitly declares the flag; every direct network-exposed adapter leaves it
 ``False`` and the env-allowlist default-deny is unchanged.
 """
 
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -65,15 +66,14 @@ def _make_runner(*, platform: Platform, authorization_is_upstream: bool):
 
 
 def _relay_source(**kw) -> SessionSource:
-    base = dict(
+    base = SessionSource(
         platform=Platform.RELAY,
         user_id="428014785045725184",
         chat_id="1400724139874058314",
         user_name="definitely_not_cthulhu",
         chat_type="group",
     )
-    base.update(kw)
-    return SessionSource(**base)
+    return replace(base, **kw)
 
 
 # ---------------------------------------------------------------------------
