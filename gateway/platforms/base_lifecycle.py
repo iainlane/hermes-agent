@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from gateway.platforms.event import MessageEvent, ProcessingOutcome
 
@@ -108,6 +108,65 @@ class BaseLifecycleMixin:
             return
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
+
+    def _withdraw_pending_event(
+        self, event: Any, matches: Callable[[MessageEvent], bool],
+    ) -> tuple[bool, Any]:
+        from gateway.platforms.base_pending import pending_part, withdraw_from_event
+        from gateway.platforms.event import _ProcessingCompletion, _ProcessingPhase
+
+        def constituents(value: MessageEvent) -> list[MessageEvent]:
+            if not value._merged_parts:
+                return [value]
+            return [part for child, _ in value._merged_parts for part in constituents(child)]
+
+        removed = [part for part in constituents(event) if matches(part)] if isinstance(event, MessageEvent) else []
+        matched, remaining = withdraw_from_event(event, matches)
+        if not matched:
+            return matched, remaining
+        if remaining is None:
+            primary = next((part for part in removed if part._processing_state is event._processing_state), event)
+            discarded = pending_part(primary)
+            if discarded._processing_state.start_notified and discarded._processing_state.awaiting_start:
+                discarded._processing_state.hand_over(discarded)
+            self._discard_parked(discarded)
+            return matched, remaining
+
+        state, retained_state = event._processing_state, remaining._processing_state
+        removed_states = {id(part._processing_state) for part in removed}
+        completions: list[_ProcessingCompletion] = []
+        pending_states = [state]
+        visited = set()
+        while pending_states:
+            current = pending_states.pop()
+            if id(current) in visited:
+                continue
+            visited.add(id(current))
+            attached = list(current.absorbed)
+            completions.extend(attached)
+            for completion in attached:
+                current.release(completion.event)
+                pending_states.append(completion.event._processing_state)
+        for completion in completions:
+            incoming_state = completion.event._processing_state
+            if id(incoming_state) not in removed_states and incoming_state is not retained_state:
+                retained_state.attach(completion)
+        if retained_state.phase is _ProcessingPhase.ABSORBED:
+            retained_state.defer()
+        if retained_state.start_notified and retained_state.awaiting_start:
+            retained_state.hand_over(remaining)
+
+        for part in removed:
+            discarded = pending_part(part)
+            discarded_state = discarded._processing_state
+            completion = next((item for item in completions if item.event._processing_state is discarded_state), None)
+            adapter = completion.adapter if completion is not None else self
+            if discarded_state.phase is _ProcessingPhase.ABSORBED:
+                discarded_state.defer()
+            if discarded_state.start_notified and discarded_state.awaiting_start:
+                discarded_state.hand_over(discarded)
+            adapter._discard_parked(discarded)
+        return matched, remaining
 
 
     def _merge_into_pending_slot(self, session_key: str, event: MessageEvent, *, merge_text: bool = False) -> None:
