@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 from agent.i18n import t
 from gateway.platforms import base_pending_merge
 from gateway.platforms.event import MessageEvent, ProcessingOutcome, MessageType
-from gateway.platforms.base_pending import _can_join_pending_event, pending_dispatch_scope, reserve_pending_dispatch, release_pending_dispatch_record
+from gateway.platforms.base_pending import can_join_pending_event, pending_dispatch_scope, reserve_pending_dispatch, release_pending_dispatch_record
 
 if TYPE_CHECKING:
     from gateway.platforms.base import BasePlatformAdapter
@@ -145,7 +145,7 @@ class BaseBusyMixin:
                     return
                 existing = self._pending_messages.get(session_key)
                 if self._text_debounce_store().get(session_key) is not None or (
-                    existing is not None and not _can_join_pending_event(existing, event)
+                    existing is not None and not can_join_pending_event(existing, event)
                 ):
                     enqueue = getattr(self.gateway_runner, "_queue_or_replace_pending_event", None)
                     event._gateway_accepted = (

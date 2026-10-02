@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Any, Callable, Awaitable
 from gateway.platforms import base_pending_merge
 from gateway.platforms.event import MessageEvent
 from gateway.platforms.base_pending import (
-    PendingWithdrawalMixin, merge_recorded, _PendingDispatchReservation, _can_join_pending_event, pending_dispatch_scope, release_pending_dispatch,
+    PendingWithdrawalMixin, merge_recorded, _PendingDispatchReservation, can_join_pending_event, pending_dispatch_scope, release_pending_dispatch,
     reserve_pending_dispatch,
     release_pending_dispatch_record,
     ingress_order,
@@ -41,7 +41,7 @@ class BaseTextBatchingMixin:
         ingress_order(event)
         key = self._text_batch_key(event)
         existing = self._pending_text_batches.get(key)
-        if existing is not None and not _can_join_pending_event(existing, event):
+        if existing is not None and not can_join_pending_event(existing, event):
             previous = self._pending_text_batch_tasks.pop(key, None)
             if previous is not None and not previous.done():
                 previous.cancel()

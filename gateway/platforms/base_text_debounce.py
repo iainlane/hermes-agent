@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
 from gateway.platforms.event import MessageEvent, MessageType
-from gateway.platforms.base_pending import _can_join_pending_event, ingress_order, merge_recorded
+from gateway.platforms.base_pending import can_join_pending_event, ingress_order, merge_recorded
 from gateway.platforms import base_pending_merge
 
 if TYPE_CHECKING:
@@ -57,7 +57,7 @@ class BaseTextDebounceMixin:
             return False
         return (
             {existing.message_type, event.message_type} <= {MessageType.TEXT, MessageType.PHOTO}
-            and _can_join_pending_event(existing, event)
+            and can_join_pending_event(existing, event)
         )
 
 

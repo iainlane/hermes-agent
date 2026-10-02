@@ -435,7 +435,7 @@ from gateway.platforms.event import MessageEvent, MessageType, ProcessingOutcome
 from gateway.platforms.base_busy import BaseBusyMixin
 from gateway.platforms.base_processing import BaseProcessingMixin
 from gateway.platforms.base_pending import (
-    PendingWithdrawalMixin, merge_recorded, _PendingDispatchReservation, _can_join_pending_event, pending_dispatch_scope, release_pending_dispatch,
+    PendingWithdrawalMixin, merge_recorded, _PendingDispatchReservation, can_join_pending_event, pending_dispatch_scope, release_pending_dispatch,
     reserve_pending_dispatch,
 )
 from gateway.warning_notifications import diagnostic_wake_muted
