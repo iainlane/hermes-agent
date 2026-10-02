@@ -9,7 +9,6 @@ from typing import Any
 
 from agent.async_utils import safe_schedule_threadsafe
 from gateway.session_context import get_session_env, get_session_transport
-from plugins.platforms.matrix.discovery import DiscoveryRequest
 from tools.registry import registry
 
 logger = logging.getLogger(__name__)
@@ -43,6 +42,8 @@ async def _matrix_read(args: dict[str, Any]) -> str:
 
     if kind in discovery_kinds:
         try:
+            from plugins.platforms.matrix.discovery import DiscoveryRequest
+
             request = DiscoveryRequest.parse(kind, limit, args.get("search_term"))
         except ValueError as exc:
             return json.dumps({"error": str(exc)})

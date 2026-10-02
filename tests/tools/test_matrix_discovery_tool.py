@@ -3,6 +3,8 @@
 import asyncio
 import importlib
 import json
+import subprocess
+import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -18,6 +20,39 @@ from hermes_constants import (
 from tools.registry import registry
 
 importlib.import_module("tools.matrix_read_tool")
+
+
+def test_builtin_discovery_registers_matrix_reads_without_loading_the_adapter():
+    code = """
+import json
+import sys
+from tools.registry import discover_builtin_tools, registry
+
+modules = discover_builtin_tools()
+print(json.dumps({
+    "discovered": "tools.matrix_read_tool" in modules,
+    "registered": registry.get_entry("matrix_read") is not None,
+    "matrix_modules": sorted(
+        module for module in sys.modules
+        if module == "plugins.platforms.matrix"
+        or module.startswith("plugins.platforms.matrix.")
+    ),
+    "result": json.loads(registry.dispatch("matrix_read", {"kind": "joined_rooms"})),
+}))
+"""
+    process = subprocess.run(
+        [sys.executable, "-c", code],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert json.loads(process.stdout) == {
+        "discovered": True,
+        "registered": True,
+        "matrix_modules": [],
+        "result": {"error": "Matrix reads require a live Matrix session"},
+    }
 
 
 async def _dispatch(arguments: dict[str, object]) -> dict[str, object]:

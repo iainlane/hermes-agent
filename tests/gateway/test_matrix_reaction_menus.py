@@ -15,6 +15,30 @@ from hermes_cli.tools_config import _get_platform_tools
 from plugins.platforms.matrix.adapter import MatrixAdapter
 
 
+@pytest.mark.parametrize(
+    "platform,expected",
+    [("matrix", True), ("cli", False), ("telegram", False), ("api_server", False)],
+)
+def test_explicit_matrix_bundle_enables_menus_only_for_matrix(platform, expected):
+    from toolsets import resolve_toolset
+
+    config = {"platform_toolsets": {platform: ["hermes-matrix"]}}
+    configured = {
+        tool
+        for toolset in _get_platform_tools(config, platform)
+        for tool in resolve_toolset(toolset)
+    }
+    default = {
+        tool
+        for toolset in _get_platform_tools({}, platform)
+        for tool in resolve_toolset(toolset)
+    }
+    assert {
+        "configured": "present_menu" in configured,
+        "default": "present_menu" in default,
+    } == {"configured": expected, "default": False}
+
+
 @pytest.mark.parametrize("platform,configured,expected", [
     ("matrix", False, False), ("matrix", True, True),
     ("cli", True, False), ("telegram", True, False), ("api_server", True, False),
