@@ -165,7 +165,10 @@ async def test_native_send_failures_preserve_the_original_target(
     detail = "key share rejected" if failure == "key_share" else (
         "upload rejected" if failure in {"upload", "encrypted_upload"} else "power level rejected"
     )
-    assert result == SendResult(success=False, error=f"Matrix target '{target}': {detail}")
+    assert result == SendResult(
+        success=False, error=f"Matrix target '{target}': {detail}",
+        error_kind="unknown" if failure == "media_send" else None,
+    )
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("path", ["same_loop", "worker"])

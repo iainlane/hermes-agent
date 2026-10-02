@@ -63,7 +63,12 @@ class _MatrixHtmlSanitizer(HTMLParser):
         tag = tag.lower()
         if tag not in self._ALLOWED_TAGS:
             if opened := self._unknown_open.get(tag):
-                self._parts[opened.pop()] = ""
+                start = opened.pop()
+                if tag in {"script", "style"}:
+                    for index in range(start, len(self._parts)):
+                        self._parts[index] = ""
+                    return
+                self._parts[start] = ""
             return
         if tag in self._VOID_TAGS:
             return

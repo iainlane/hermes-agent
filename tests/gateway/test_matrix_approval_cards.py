@@ -419,7 +419,7 @@ class TestApprovalCardFormatting:
         assert token not in out
 
     def test_matrix_html_sanitizer_preserves_native_disclosure_and_drops_unsafe_markup(self):
-        from plugins.platforms.matrix.adapter import _sanitize_matrix_html
+        from plugins.platforms.matrix.rendering import _sanitize_matrix_html
 
         raw = (
             '<details open onclick="alert(1)" style="display:block">'
@@ -450,7 +450,7 @@ class TestApprovalCardFormatting:
         ),
     )
     def test_matrix_html_sanitizer_rejects_obfuscated_unsafe_urls(self, href):
-        from plugins.platforms.matrix.adapter import _sanitize_matrix_html
+        from plugins.platforms.matrix.rendering import _sanitize_matrix_html
 
         assert _sanitize_matrix_html(f'<a href="{href}">bad link</a>') == "<a>bad link</a>"
 
