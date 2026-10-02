@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from gateway.input_owner import gateway_input_owner
 from gateway.run_inbound_logging import log_inbound_reply_context
-from gateway.platforms.event import MessageEvent, ProcessingOutcome, _ProcessingCompletion
+from gateway.platforms.event import MessageEvent, MessageType, ProcessingOutcome, _ProcessingCompletion
 from gateway.platforms.base_pending import reserve_pending_dispatch, release_pending_dispatch_record
 from gateway.response_filters import display_kind_for_event, reply_expected_metadata
 from gateway.run_inbound_turn_context import channel_state_metadata
@@ -115,7 +115,7 @@ class GatewayQueuedFollowupMixin:
                 )
                 adapter = self._delivery_adapter_for(source)
                 if adapter and pending_event:
-                    self._restore_pending_dispatch(session_key, pending_event, adapter)
+                    await self._park_followup_at_recursion_cap(adapter, session_key, pending_event)
                 elif adapter and hasattr(adapter, 'queue_message'):
                     adapter.queue_message(session_key, pending)
                 return turn_ctx.result_holder[0] or {"final_response": response, "messages": history}
@@ -370,3 +370,24 @@ class GatewayQueuedFollowupMixin:
                 defer_to._processing_state.attach(attached)
                 continue
             await attached.adapter._run_processing_hook("on_processing_complete", attached.event, outcome)
+
+    async def _park_followup_at_recursion_cap(
+        self: GatewayRunner, adapter: Any, session_key: str | None, event: MessageEvent,
+    ) -> None:
+        from gateway.platforms.base_pending import _can_join_pending_event, pending_dispatch_withdrawn
+
+        if session_key is None:
+            return
+        if pending_dispatch_withdrawn(adapter, session_key, event):
+            return
+        existing = adapter._pending_messages.get(session_key)
+        media_types = {getattr(existing, "message_type", None), event.message_type}
+        if (existing is not None and not self._overflow_queue(session_key)
+                and _can_join_pending_event(existing, event)
+                and MessageType.PHOTO in media_types
+                and media_types <= {MessageType.TEXT, MessageType.PHOTO}):
+            await self._complete_discarded_event(self._merge_into_pending_slot(adapter, session_key, event))
+            event._gateway_accepted = True
+            return
+        self._restore_pending_dispatch(session_key, event, adapter)
+        self._park_event_lifecycle(event)
