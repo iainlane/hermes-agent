@@ -130,7 +130,10 @@ async def test_help_skills_lists_every_skill_command(skill_home, args, gated):
 def _command_matches(row: str, query: str) -> bool:
     """Whether *query* occurs in the name, an alias, the argument hint or the description of
     the command in *row*, ignoring case and reading ``_`` as ``-``."""
-    cmd = resolve_command(re.match(r"`/([^` ]+)", row).group(1))
+    match = re.match(r"`/([^` ]+)", row)
+    assert match is not None
+    cmd = resolve_command(match.group(1))
+    assert cmd is not None
     fields = [f"/{cmd.name}", *(f"/{alias}" for alias in cmd.aliases), cmd.args_hint, cmd.describe()]
     needle = query.lower().replace("_", "-")
     return any(needle in field.lower().replace("_", "-") for field in fields)

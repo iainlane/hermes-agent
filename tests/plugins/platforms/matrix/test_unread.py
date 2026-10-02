@@ -404,7 +404,7 @@ async def test_receipt_interruptions_stop_the_owner_and_preserve_partial_results
     client.get_event.side_effect = target
     client.api.request.side_effect = receipt
     client.set_account_data.side_effect = marker
-    adapter._is_dm_room.side_effect = access
+    adapter._is_dm_room = AsyncMock(side_effect=access)
     try:
         if stage == "before":
             set_interrupt(True, parent)
@@ -466,7 +466,7 @@ async def test_read_writes_recheck_membership_and_owner_after_final_access(stage
                     transport_adapter=adapter, transport_loop=asyncio.get_running_loop())
         return False
 
-    adapter._is_dm_room.side_effect = final_access
+    adapter._is_dm_room = AsyncMock(side_effect=final_access)
     result = await _tool(adapter, "matrix_mark_read", {
         "event_id": "$target", "thread_id": "room", "visibility": "public",
     })
@@ -515,7 +515,7 @@ async def test_unread_reads_stop_the_owner_before_returning(monkeypatch, stop):
         finally:
             drained.set()
 
-    adapter._is_dm_room.side_effect = room_kind
+    adapter._is_dm_room = AsyncMock(side_effect=room_kind)
     pending = asyncio.create_task(_tool(adapter, "matrix_unread", {}))
     forced_release = False
     try:

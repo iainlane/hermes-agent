@@ -2,6 +2,7 @@
 
 import asyncio
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -602,7 +603,7 @@ async def test_real_admission_distinguishes_unavailable_classification_from_deni
         kind, "!a-origin:server", 20, requester="@alice:server"
     )
     room_type = "m.space" if kind == "joined_spaces" else None
-    expected = {
+    expected: dict[str, Any] = {
         ("candidate", "malformed"): {
             "rooms": [_summary("!a-origin:server", room_type)],
             "truncated": True,

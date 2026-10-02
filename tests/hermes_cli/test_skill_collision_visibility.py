@@ -93,6 +93,7 @@ def test_cli_note_advises_a_launch_command_that_loads_the_skill(
         monkeypatch.setenv("HERMES_HOME", str(profile_home))
     _write_skill("handoff")
     note = cli_skill_command_collision_note("handoff")
+    assert note is not None
 
     monkeypatch.setenv("HERMES_HOME", str(root))
     argv = shlex.split(note.partition(" hermes ")[2])
