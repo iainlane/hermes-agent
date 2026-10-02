@@ -30,7 +30,7 @@ from testcontainers.core.labels import LABEL_SESSION_ID, SESSION_ID
 from testcontainers.core.network import Network
 
 from hermes_platform.host import facts
-from tests.fakes.fake_llm_provider import FakeLLMServer, Text, write_hermes_home
+from tests.fakes.fake_llm_provider import FakeLLMServer, Responder, Response, Text, write_hermes_home
 from tests.integration.matrix_live.image_build import REPO_ROOT, build_command
 
 
@@ -457,7 +457,7 @@ def gateway_extra_config() -> str:
 
 
 @pytest.fixture
-def model_responder() -> Callable[[dict], Text] | None:
+def model_responder() -> Responder | None:
     return None
 
 
@@ -484,7 +484,7 @@ def gateway(
     gateway_config: str,
     gateway_home_setup: Callable[[Path], None],
     gateway_auxiliary_config: str,
-    model_responder: Callable[[dict], Text] | None,
+    model_responder: Responder | None,
 ) -> Iterator[LiveGateway]:
     param = getattr(request, "param", GatewaySettings())
     settings = GatewaySettings(mode=param) if isinstance(param, str) else param
@@ -496,7 +496,7 @@ def gateway(
     native_images = mode in {"pause-image-context", "pause-image-conversion", "image-packs"}
     home = gateway_home
     route = _host_route(network)
-    script = model_responder
+    script: list[Response] | Responder | None = model_responder
     if script is None:
         script = [] if mode == "inspection" else [Text(settings.reply)]
     with FakeLLMServer(

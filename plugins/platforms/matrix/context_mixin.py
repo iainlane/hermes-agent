@@ -317,7 +317,7 @@ class MatrixContextMixin:
             self._room_identity_cached_at.pop(room_id, None)
 
     async def _resolve_room_identity(
-        self: MatrixAdapter, room_id: str, *, force_refresh: bool = False, owner: RoomClientOwner | None = None,
+        self: MatrixAdapter, room_id: str, *, force_refresh: bool = False, owner: RoomClientScope | None = None,
     ) -> MatrixRoomIdentity:
         """Resolve room identity from joined membership and room metadata."""
         owner = owner or LiveRoomClient(self)
