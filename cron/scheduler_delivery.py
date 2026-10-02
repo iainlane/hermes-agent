@@ -1170,6 +1170,8 @@ def _live_route_metadata(t: _TargetDelivery) -> tuple[Optional[str], dict, dict]
         and looks_like_telegram_private_chat_id(str(t.chat_id))
         and _looks_like_int(str(thread_id))
     )
+    route_metadata: dict[str, Any]
+    media_metadata: dict[str, Any]
     if is_ambiguous_telegram_topic and _is_channel_dm_topic(
         t.runtime_adapter, t.chat_id, t.loop, job["id"]):
         # Channel DM topic: direct_messages_topic_id, no bare thread_id; media mirrors text.
