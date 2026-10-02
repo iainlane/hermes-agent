@@ -88,7 +88,7 @@ async def test_redaction_preserves_only_the_authorised_remaining_input(monkeypat
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("in_content", [False, True], ids=["v10", "v11"])
-@pytest.mark.parametrize("confirmation", ["accepted", "other-actor", "unredacted", "unreadable"])
+@pytest.mark.parametrize("confirmation", ["accepted", "other-actor", "unredacted", "unreadable", "malformed"])
 async def test_moderator_withdrawal_requires_current_server_redaction(monkeypatch, in_content, confirmation):
     from mautrix.api import HTTPAPI, Method
     from mautrix.client.api import ClientAPI
@@ -110,6 +110,8 @@ async def test_moderator_withdrawal_requires_current_server_redaction(monkeypatc
         redaction["content"]["redacts"] = "$two"
     else:
         redaction["redacts"] = "$two"
+    if confirmation == "malformed":
+        redaction["content"] = ["invalid redaction content"]
     current = {"type": "m.room.message", "room_id": ROOM, "event_id": "$two", "sender": ALICE,
                "origin_server_ts": int(time.time() * 1000), "content": {}}
     if confirmation != "unredacted":
