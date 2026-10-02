@@ -64,28 +64,60 @@ except ImportError:
     # tests exercise adapter methods so the attributes must exist.
     EventID = RoomID = UserID = str  # type: ignore[misc,assignment]
 
-    EventType = type("_EventTypeStub", (), {  # type: ignore[misc,assignment]
-        "ROOM_MESSAGE": "m.room.message", "REACTION": "m.reaction",
-        "ROOM_ENCRYPTED": "m.room.encrypted", "ROOM_NAME": "m.room.name",
-        "ROOM_TOPIC": "m.room.topic", "ROOM_CANONICAL_ALIAS": "m.room.canonical_alias",
-        "ROOM_MEMBER": "m.room.member", "ROOM_TOMBSTONE": "m.room.tombstone",
-        "ROOM_ENCRYPTION": "m.room.encryption", "ROOM_REDACTION": "m.room.redaction",
-        "ROOM_JOIN_RULES": "m.room.join_rules",
-        "ROOM_HISTORY_VISIBILITY": "m.room.history_visibility"})
-    PresenceState = type("_PresenceStateStub", (), {  # type: ignore[misc,assignment]
-        "ONLINE": "online", "OFFLINE": "offline", "UNAVAILABLE": "unavailable"})
-    Membership = type("_MembershipStub", (), {  # type: ignore[misc,assignment]
-        "JOIN": "join", "INVITE": "invite"})
-    RoomCreatePreset = type("_RoomCreatePresetStub", (), {  # type: ignore[misc,assignment]
-        "PRIVATE": "private_chat", "PUBLIC": "public_chat", "TRUSTED_PRIVATE": "trusted_private_chat"})
+    EventType = type(
+        "_EventTypeStub",
+        (),
+        {  # type: ignore[misc,assignment]
+            "ROOM_MESSAGE": "m.room.message",
+            "REACTION": "m.reaction",
+            "ROOM_ENCRYPTED": "m.room.encrypted",
+            "ROOM_NAME": "m.room.name",
+            "ROOM_TOPIC": "m.room.topic",
+            "ROOM_CANONICAL_ALIAS": "m.room.canonical_alias",
+            "ROOM_MEMBER": "m.room.member",
+            "ROOM_TOMBSTONE": "m.room.tombstone",
+            "ROOM_ENCRYPTION": "m.room.encryption",
+            "ROOM_REDACTION": "m.room.redaction",
+            "ROOM_JOIN_RULES": "m.room.join_rules",
+            "ROOM_HISTORY_VISIBILITY": "m.room.history_visibility",
+        },
+    )
+    PresenceState = type(
+        "_PresenceStateStub",
+        (),
+        {  # type: ignore[misc,assignment]
+            "ONLINE": "online",
+            "OFFLINE": "offline",
+            "UNAVAILABLE": "unavailable",
+        },
+    )
+    Membership = type(
+        "_MembershipStub",
+        (),
+        {  # type: ignore[misc,assignment]
+            "JOIN": "join",
+            "INVITE": "invite",
+        },
+    )
+    RoomCreatePreset = type(
+        "_RoomCreatePresetStub",
+        (),
+        {  # type: ignore[misc,assignment]
+            "PRIVATE": "private_chat",
+            "PUBLIC": "public_chat",
+            "TRUSTED_PRIVATE": "trusted_private_chat",
+        },
+    )
     TrustState = type("_TrustStateStub", (), {"UNVERIFIED": 0, "VERIFIED": 1})  # type: ignore[misc,assignment]
     SpecVersions = type("_SpecVersionsStub", (), {"V111": "v1.11"})  # type: ignore[misc,assignment]
 
 try:
     from mautrix.errors import MNotFound
 except ImportError:
+
     class MNotFound(Exception):  # type: ignore[no-redef]
         """Import-safe stand-in for the homeserver's M_NOT_FOUND error."""
+
 
 from gateway.config import Platform, PlatformConfig
 from plugins.platforms.matrix.outbound_relations import ThreadFallbackTracker
@@ -108,9 +140,14 @@ from plugins.platforms.matrix.sync_transport import (
     is_invalid_sync_cursor,
 )
 from plugins.platforms.matrix.reaction_followups import (
-    FinalDeliveryEvents, PendingFollowupReactions, ReactionWatchStore,
+    FinalDeliveryEvents,
+    PendingFollowupReactions,
+    ReactionWatchStore,
 )
-from plugins.platforms.matrix.followup_mixin import MatrixFollowupMixin, _MatrixFollowupChoice
+from plugins.platforms.matrix.followup_mixin import (
+    MatrixFollowupMixin,
+    _MatrixFollowupChoice,
+)
 from gateway.platforms.base_exec_approval import EA_HEADER_TEXT
 from plugins.platforms.matrix.room_inspection import inspect_matrix_room
 from plugins.platforms.matrix.room_admin import administer_matrix_pin, administer_matrix_room
@@ -817,7 +854,10 @@ class _CryptoStateStore:
         return list(self._joined_rooms)  # all joined rooms: correct for a single-user bot
 
 
-class MatrixAdapter(MatrixIntakeMixin, MatrixRedactionMixin, MatrixFollowupMixin, MatrixRichContentMixin, MatrixContextMixin, BasePlatformAdapter):
+from plugins.platforms.matrix.invites import MatrixInvitesMixin
+
+
+class MatrixAdapter(MatrixInvitesMixin, MatrixIntakeMixin, MatrixRedactionMixin, MatrixFollowupMixin, MatrixRichContentMixin, MatrixContextMixin, BasePlatformAdapter):
     """Gateway adapter for Matrix (any homeserver)."""
 
     supports_code_blocks = True  # Matrix renders fenced code blocks (HTML/markdown)
@@ -848,12 +888,23 @@ class MatrixAdapter(MatrixIntakeMixin, MatrixRedactionMixin, MatrixFollowupMixin
         # under multiplex os.environ holds the DEFAULT profile's identity, and pairing it with a
         # secondary's credential sends that credential to the wrong homeserver (or reuses the
         # default's E2EE device id).
-        self._homeserver: str = (config.extra.get("homeserver", "") or _get_scoped_secret("MATRIX_HOMESERVER", "").strip()).rstrip("/")
-        self._access_token: str = config.token or _get_scoped_secret("MATRIX_ACCESS_TOKEN", "").strip()
-        self._configured_user_id: str = config.extra.get("user_id", "") or _get_scoped_secret("MATRIX_USER_ID", "").strip()
+        self._homeserver: str = (
+            config.extra.get("homeserver", "")
+            or _get_scoped_secret("MATRIX_HOMESERVER", "").strip()
+        ).rstrip("/")
+        self._access_token: str = (
+            config.token or _get_scoped_secret("MATRIX_ACCESS_TOKEN", "").strip()
+        )
+        self._configured_user_id: str = (
+            config.extra.get("user_id", "")
+            or _get_scoped_secret("MATRIX_USER_ID", "").strip()
+        )
         self._user_id: str = self._configured_user_id
         self._crypto_account_id: str = ""
-        self._password: str = config.extra.get("password", "") or _get_scoped_secret("MATRIX_PASSWORD", "").strip()
+        self._password: str = (
+            config.extra.get("password", "")
+            or _get_scoped_secret("MATRIX_PASSWORD", "").strip()
+        )
         self._e2ee_mode: str = _resolve_e2ee_mode(config.extra)
         self._encryption: bool = self._e2ee_mode != "off"
         self._device_id: str = config.extra.get("device_id", "") or _get_scoped_secret("MATRIX_DEVICE_ID", "").strip()
@@ -884,7 +935,9 @@ class MatrixAdapter(MatrixIntakeMixin, MatrixRedactionMixin, MatrixFollowupMixin
         self._buffered_intakes: dict[str, asyncio.Future[bool]] = {}
         self._thread_fallbacks = ThreadFallbackTracker()
         try:
-            self._thread_backfill_limit = max(0, min(100, int(config.extra.get("thread_backfill_limit", 20))))
+            self._thread_backfill_limit = max(
+                0, min(100, int(config.extra.get("thread_backfill_limit", 20)))
+            )
         except (TypeError, ValueError):
             self._thread_backfill_limit = 20
         try:
@@ -1214,8 +1267,11 @@ class MatrixAdapter(MatrixIntakeMixin, MatrixRedactionMixin, MatrixFollowupMixin
         elif self._password and self._configured_user_id:
             try:
                 resp = await client.login(
-                    identifier=self._configured_user_id, password=self._password, device_name="Hermes Agent",
-                    device_id=self._device_id or None)
+                    identifier=self._configured_user_id,
+                    password=self._password,
+                    device_name="Hermes Agent",
+                    device_id=self._device_id or None,
+                )
                 if resp and hasattr(resp, "device_id"):
                     client.device_id = resp.device_id
                 # Existing E2EE stores are keyed by the configured spelling. Keying them by the
@@ -2491,8 +2547,12 @@ class MatrixAdapter(MatrixIntakeMixin, MatrixRedactionMixin, MatrixFollowupMixin
         return event
 
     async def prepare_turn_context(
-        self, event: MessageEvent, *, origin: SessionSource | None,
-        acknowledged_state: Dict[str, Any] | None, first_turn: bool,
+        self,
+        event: MessageEvent,
+        *,
+        origin: SessionSource | None,
+        acknowledged_state: Dict[str, Any] | None,
+        first_turn: bool,
     ) -> TurnContextUpdate | None:
         if event.internal or self._client is None:
             return None
@@ -2512,9 +2572,13 @@ class MatrixAdapter(MatrixIntakeMixin, MatrixRedactionMixin, MatrixFollowupMixin
             except Exception as exc:
                 logger.debug("Matrix mention context fetch failed: %s", exc)
         if event.message_type == MessageType.TEXT:
-            current = (await self._resolve_room_identity(event.source.chat_id)).room_state
+            current = (
+                await self._resolve_room_identity(event.source.chat_id)
+            ).room_state
         if current is not None:
-            previous = MatrixRoomState.from_dict(acknowledged_state) or MatrixRoomState.from_origin(origin or event.source)
+            previous = MatrixRoomState.from_dict(
+                acknowledged_state
+            ) or MatrixRoomState.from_origin(origin or event.source)
             room_note = format_room_notes(current.changes_since(previous))
         update = MatrixTurnContextUpdate(
             None, current.to_dict() if current is not None else None, room_note=room_note, history=history,
@@ -2698,131 +2762,7 @@ class MatrixAdapter(MatrixIntakeMixin, MatrixRedactionMixin, MatrixFollowupMixin
         if room_id:
             self._invalidate_room_identities(room_id)
 
-    async def _on_invite(self, event: Any) -> None:
-        """Auto-join rooms when invited, recording DM rooms in m.direct."""
-        room_id = str(getattr(event, "room_id", ""))
-        is_direct = bool(getattr(getattr(event, "content", None), "is_direct", False))
-        inviter = str(getattr(event, "sender", ""))
-        # Only authorized inviters — otherwise any federated user could pull the bot into rooms.
-        if not self._is_authorized_user(inviter, str(room_id)):
-            logger.warning("Matrix: rejecting invite to %s from unauthorized user %s", room_id, inviter)
-            return
-        logger.info("Matrix: invited to %s — joining (is_direct=%s)", room_id, is_direct)
-        # Join off the sync path; a declared DM is recorded in m.direct once the join lands.
-        self._schedule_invite_join(room_id, is_direct=is_direct and bool(inviter), inviter=inviter)
 
-    async def _join_room_by_id(self, room_id: str) -> bool:
-        if not room_id or room_id in self._joined_rooms:
-            return bool(room_id)
-        try:
-            await self._client.join_room(RoomID(room_id))
-            self._joined_rooms.add(room_id)
-            self._invalidate_room_identities(room_id)
-            logger.info("Matrix: joined %s", room_id)
-            await self._refresh_dm_cache()
-            return True
-        except Exception as exc:
-            logger.warning("Matrix: error joining %s: %s", room_id, exc)
-            # Abandoned rooms ("no servers ..." / "room not found") would retry every startup
-            # unless we leave the invite; the match is narrow so transient errors keep retrying.
-            msg = str(exc).lower()
-            if ("no servers" in msg) or ("room not found" in msg):
-                with suppress(Exception):
-                    await self._client.leave_room(RoomID(room_id))
-                    logger.info("Matrix: declined dead invite to %s", room_id)
-            return False
-
-    def _schedule_invite_join(self, room_id: str, *, is_direct: bool = False, inviter: str = "") -> None:
-        """Schedule an invite join without blocking sync or gateway readiness."""
-        existing = self._invite_join_tasks.get(room_id)
-        if not room_id or room_id in self._joined_rooms or (existing and not existing.done()):
-            return
-
-        async def _join_invite() -> None:
-            try:
-                joined = await asyncio.wait_for(self._join_room_by_id(room_id), timeout=45.0)
-                if joined and is_direct and inviter:
-                    await self._record_dm_room(room_id, inviter)
-            except asyncio.TimeoutError:
-                logger.warning("Matrix: timed out joining invite %s", room_id)
-            finally:
-                self._invite_join_tasks.pop(room_id, None)
-        self._invite_join_tasks[room_id] = asyncio.create_task(_join_invite())
-
-    def _schedule_pending_invite_joins(self, sync_data: Dict[str, Any]) -> None:
-        """Join rooms still present in rooms.invite after sync processing."""
-        invites = (sync_data.get("rooms", {}) if isinstance(sync_data, dict) else {}).get("invite", {})
-        if not isinstance(invites, dict):
-            return
-        for room_id, invited_room in invites.items():
-            if room_id in self._joined_rooms:
-                continue
-            # This reconcile pass runs after _dispatch_sync and sees every
-            # rooms.invite entry, whether _on_invite joined it, rejected
-            # it, or (for invites that arrived while the gateway was down)
-            # is only now seeing it. The invite event object is gone by
-            # this point, so the DM signal must be read from the stripped
-            # invite state. Without it, a direct invite joined here is never
-            # recorded in m.direct.
-            is_direct, inviter = self._extract_invite_dm_signal(invited_room)
-            # The inviter allowlist gate from _on_invite must apply here
-            # too: an unconditional join would re-admit a live invite that
-            # _on_invite just rejected milliseconds earlier, and would
-            # auto-join any invite from an arbitrary federated user on
-            # restart. An inviter missing from the stripped invite state
-            # fails closed, like an empty sender in _on_invite.
-            if not self._is_authorized_user(inviter, str(room_id)):
-                logger.warning(
-                    "Matrix: rejecting invite to %s from unauthorized user %s",
-                    room_id,
-                    inviter,
-                )
-                continue
-            logger.info(
-                "Matrix: reconciling pending invite for %s (is_direct=%s)",
-                room_id,
-                is_direct,
-            )
-            self._schedule_invite_join(str(room_id), is_direct=is_direct, inviter=inviter)
-
-    def _extract_invite_dm_signal(self, invited_room: Any) -> tuple[bool, str]:
-        """Read the is_direct flag and inviter from a room's invite_state.
-
-        The stripped ``m.room.member`` event for our own user carries the
-        ``is_direct`` flag from the original invite; its sender is the
-        inviter. Returns ``(False, "")`` when the signal is absent.
-        """
-        if not self._user_id:
-            return False, ""
-
-        if not isinstance(invited_room, dict):
-            return False, ""
-
-        invite_state = invited_room.get("invite_state", {})
-        if not isinstance(invite_state, dict):
-            return False, ""
-
-        events = invite_state.get("events", [])
-        if not isinstance(events, list):
-            return False, ""
-
-        for event in events:
-            if not isinstance(event, dict):
-                continue
-            if event.get("type") != "m.room.member":
-                continue
-            if event.get("state_key") != self._user_id:
-                continue
-
-            content = event.get("content", {})
-            if not isinstance(content, dict):
-                continue
-            if content.get("membership") != "invite":
-                continue
-
-            return bool(content.get("is_direct")), str(event.get("sender", ""))
-
-        return False, ""
 
     async def _send_reaction(self, room_id: str, event_id: str, emoji: str) -> Optional[str]:
         """Send an emoji reaction; returns the reaction event_id, or None on failure."""
@@ -3877,9 +3817,16 @@ def _is_connected(config) -> bool:
     setup-status callers that patch it see the same value; PlatformConfig extras are honored."""
     extra = getattr(config, "extra", {}) or {}
     import hermes_cli.gateway as gateway_mod
-    homeserver = extra.get("homeserver") or gateway_mod.get_env_value("MATRIX_HOMESERVER") or ""
-    token = (getattr(config, "token", None) or gateway_mod.get_env_value("MATRIX_ACCESS_TOKEN")
-             or gateway_mod.get_env_value("MATRIX_PASSWORD") or "")
+
+    homeserver = (
+        extra.get("homeserver") or gateway_mod.get_env_value("MATRIX_HOMESERVER") or ""
+    )
+    token = (
+        getattr(config, "token", None)
+        or gateway_mod.get_env_value("MATRIX_ACCESS_TOKEN")
+        or gateway_mod.get_env_value("MATRIX_PASSWORD")
+        or ""
+    )
     return bool(str(homeserver).strip() and str(token).strip())
 
 
