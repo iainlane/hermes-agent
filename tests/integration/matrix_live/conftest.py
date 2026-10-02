@@ -548,11 +548,6 @@ def model_responder() -> Responder | None:
 
 
 @pytest.fixture
-def gateway_auxiliary_config() -> str:
-    return ""
-
-
-@pytest.fixture
 def gateway_home(tmp_path: Path) -> Path:
     home = tmp_path / "hermes"
     home.mkdir()
