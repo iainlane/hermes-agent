@@ -773,7 +773,10 @@ async def test_withdrawal_replaces_the_message_not_an_identical_reply_quote(
     )
 
     message = "[redacted]" if withdrawn else _body("sticker")
-    assert prepared == f'[Replying to Alice: "{_body("sticker")}"]\n\n{message}'
+    assert prepared == (
+        f"[Matrix source: {event.source.source_permalink}]\n\n"
+        f'[Replying to Alice: "{_body("sticker")}"]\n\n{message}'
+    )
 
 
 @pytest.mark.asyncio

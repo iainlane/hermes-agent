@@ -127,7 +127,7 @@ def _make_fake_mautrix():
     class Membership:
         JOIN = "join"
 
-    mautrix_types.Membership = Membership
+    setattr(mautrix_types, "Membership", Membership)
     mautrix_types.EventType = EventType
     mautrix_types.UserID = UserID
     mautrix_types.RoomID = RoomID
@@ -235,7 +235,8 @@ def _make_fake_mautrix():
 
     def encrypt_attachment(data):
         encrypted_file = MagicMock()
-        encrypted_file.serialize.return_value = {
+        encrypted_file.serialize.side_effect = lambda: {
+            "url": str(encrypted_file.url),
             "key": {"k": "testkey"}, "iv": "testiv",
             "hashes": {"sha256": "testhash"}, "v": "v2",
         }
@@ -6049,25 +6050,25 @@ class TestMatrixSourcePermalink:
     )
     async def test_via_follows_matrix_routing_recommendation(self, members, room_version, via):
         from mautrix.client.state_store import MemoryStateStore
-        from mautrix.types import Member, Membership, StateEvent
+        from mautrix.types import Member, Membership, StateEvent, RoomID, UserID, EventID, EventType, RoomCreateStateEventContent
 
-        room_id = "!room:example.org"
+        room_id = RoomID("!room:example.org")
         store = MemoryStateStore()
         await store.set_members(
             room_id,
-            {user_id: Member(membership=Membership.JOIN) for user_id in members}
-            | {"@gone:gone.example": Member(membership=Membership.LEAVE)},
+            {UserID(user_id): Member(membership=Membership.JOIN) for user_id in members}
+            | {UserID("@gone:gone.example"): Member(membership=Membership.LEAVE)},
         )
         await store.set_power_levels(
             room_id,
             {"users": {user_id: level for user_id, level in members.items() if level}
              | {"@gone:gone.example": 100}},
         )
-        await store.set_create(StateEvent.deserialize({
-            "type": "m.room.create", "room_id": room_id, "event_id": "$create",
-            "sender": "@creator:creator.example", "state_key": "", "origin_server_ts": 0,
-            "content": {"room_version": room_version},
-        }))
+        await store.set_create(StateEvent(
+            type=EventType.ROOM_CREATE, room_id=room_id, event_id=EventID("$create"),
+            sender=UserID("@creator:creator.example"), state_key="", timestamp=0,
+            content=RoomCreateStateEventContent(room_version=room_version),
+        ))
         self.adapter._client.state_store = store
 
         source = await self._source(room_id=room_id)
@@ -7044,19 +7045,19 @@ async def test_permalink_routing_obeys_authoritative_acl_and_later_sync(joined, 
     from mautrix.client import Client
     from mautrix.client.state_store import MemoryStateStore, MemorySyncStore
     from mautrix.errors import MNotFound
-    from mautrix.types import Member, Membership
+    from mautrix.types import Member, Membership, RoomID, UserID
 
     case = TestMatrixSourcePermalink()
     case.setup_method()
     adapter = case.adapter
-    room = "!room:Blocked.Example:8448"
+    room = RoomID("!room:Blocked.Example:8448")
     adapter._user_id = "@bot:Blocked.Example:8448"
     store = MemoryStateStore()
     if joined:
         await store.set_members(room, {
-            "@admin:Blocked.Example:8448": Member(membership=Membership.JOIN),
-            "@member:allowed.example": Member(membership=Membership.JOIN),
-            "@ip:192.0.2.1": Member(membership=Membership.JOIN),
+            UserID("@admin:Blocked.Example:8448"): Member(membership=Membership.JOIN),
+            UserID("@member:allowed.example"): Member(membership=Membership.JOIN),
+            UserID("@ip:192.0.2.1"): Member(membership=Membership.JOIN),
         })
         await store.set_power_levels(room, {"users": {"@admin:Blocked.Example:8448": 100}})
     denied = {"allow": ["*.example"], "deny": ["blocked.?xample"]}
@@ -7172,7 +7173,9 @@ async def test_status_notice_does_not_change_thread_reply_fallback(send_kind):
         adapter._apply_relation_metadata(_CATCH_UP_ROOM, content, metadata={"thread_id": "$root"})
         await adapter._send_content_event(_CATCH_UP_ROOM, content)
     await adapter.send(_CATCH_UP_ROOM, "Answer", metadata={"thread_id": "$root"})
-    relation = adapter._client.send_message_event.await_args.args[2]["m.relates_to"]
+    delivered = adapter._client.send_message_event.await_args
+    assert delivered is not None
+    relation = delivered.args[2]["m.relates_to"]
     assert relation == {
         "rel_type": "m.thread", "event_id": "$root", "is_falling_back": True,
         "m.in_reply_to": {"event_id": "$incoming"},

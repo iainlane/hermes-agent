@@ -98,19 +98,22 @@ def _make_audio_event(
 def _make_state_store():
     """A mautrix state store in which the bot and Alice have joined the test room."""
     from mautrix.client.state_store import MemoryStateStore
+    from mautrix.client.state_store.memory import SerializedStateStore
+    from mautrix.types import RoomID, UserID
 
-    room_id = "!test:example.org"
+    room_id = RoomID("!test:example.org")
     store = MemoryStateStore()
-    store.deserialize({
+    serialized: SerializedStateStore = {
         "members": {room_id: {
-            "@bot:example.org": {"membership": "join"},
-            "@alice:example.org": {"membership": "join", "displayname": "Alice"},
+            UserID("@bot:example.org"): {"membership": "join"},
+            UserID("@alice:example.org"): {"membership": "join", "displayname": "Alice"},
         }},
         "full_member_list": {room_id: True},
         "power_levels": {},
         "encryption": {},
         "create": {},
-    })
+    }
+    store.deserialize(serialized)
     return store
 
 

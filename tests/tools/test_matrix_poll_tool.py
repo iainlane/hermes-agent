@@ -87,7 +87,7 @@ def poll_client(start, relations=(), *, levels=None, crypto=None):
     from mautrix.errors import MNotFound
 
     async def request(method, path, **kwargs):
-        return start if "/event/" in path else {"chunk": list(relations)}
+        return start if "/event/" in str(path) else {"chunk": list(relations)}
 
     async def state(room_id, event_type):
         if str(event_type) == "m.room.power_levels":
@@ -124,7 +124,7 @@ async def test_registry_uses_each_receiving_adapter_and_native_sdk_types(action,
     for actor in ("@bot:server", "@second:server", "@bot:server"):
         async def request(method, path, **kwargs):
             assert asyncio.get_running_loop() is owning_loop
-            return owned_start(actor) if "/event/" in path else {"chunk": []}
+            return owned_start(actor) if "/event/" in str(path) else {"chunk": []}
 
         async def state(room_id, event_type):
             raise MNotFound(404, "Room is not encrypted")
@@ -188,7 +188,7 @@ async def test_results_and_writes_fail_closed_and_polls_remain_passive(problem):
         response.update(type="m.room.encrypted", content={})
 
     async def request(method, path, **kwargs):
-        if "/event/" in path:
+        if "/event/" in str(path):
             return start
         if "/m.annotation" in path:
             return {"chunk": []}
@@ -242,7 +242,7 @@ async def test_encrypted_stable_poll_end_appears_in_reads_and_history():
                      "m.relates_to": content["m.relates_to"]}}
 
     async def request(method, path, **kwargs):
-        return encrypted if "/event/" in path else {"chunk": []}
+        return encrypted if "/event/" in str(path) else {"chunk": []}
 
     client = SimpleNamespace(api=SimpleNamespace(request=AsyncMock(side_effect=request)),
                              crypto=SimpleNamespace(decrypt_megolm_event=AsyncMock(return_value=decrypted)))
@@ -275,6 +275,7 @@ async def test_room_reads_include_plain_poll_events_under_the_server_filter():
 
     async def request(method, path, query_params=None, **kwargs):
         if path.endswith("/messages"):
+            assert query_params is not None
             types = json.loads(query_params["filter"])["types"]
             return {"chunk": [event for event in timeline if event["type"] in types]}
         return {"chunk": []}

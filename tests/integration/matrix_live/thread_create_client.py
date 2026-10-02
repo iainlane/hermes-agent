@@ -234,7 +234,7 @@ class ThreadCreationProbe:
         changed = False
 
         class AdmissionAdapter(MatrixAdapter):
-            async def _is_dm_room(self, room_id: str) -> bool:
+            async def _is_dm_room(self, room_id: str, *, owner=None, require_classification=False) -> bool:
                 nonlocal changed
                 if not changed:
                     response = await observer.room_put_state(
@@ -245,7 +245,7 @@ class ThreadCreationProbe:
                     assert isinstance(response, RoomPutStateResponse), response
                     changed = True
                     await sdk.get_state(RoomID(room_id))
-                return await super()._is_dm_room(room_id)
+                return await super()._is_dm_room(room_id, owner=owner, require_classification=require_classification)
 
         adapter = AdmissionAdapter(
             PlatformConfig(

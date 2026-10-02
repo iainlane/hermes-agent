@@ -308,7 +308,8 @@ async def test_reply_strips_only_a_reply_fallback(
     monkeypatch, require_mention, content, expected
 ):
     """Matrix 1.13 (MSC2781) removed reply fallbacks, so a leading quote in a reply can be
-    the user's own text. It must reach the agent, with a bot mention stripped like any text."""
+    the user's own text. Mentions inside that quote remain literal; a typed mention
+    outside the quote is stripped."""
     adapter = _make_adapter(require_mention=require_mention, monkeypatch=monkeypatch)
     adapter._startup_ts = time.time() - 10
 
