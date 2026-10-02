@@ -2,8 +2,11 @@
 
 import asyncio
 import json
+import os
+import subprocess
 import sys
 import threading
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -122,6 +125,26 @@ class _MissingEncryption(Exception):
     errcode = "M_NOT_FOUND"
 
 
+def _finish_gateway_loop(loop: asyncio.AbstractEventLoop, gateway: threading.Thread) -> None:
+    async def drain():
+        current = asyncio.current_task()
+        tasks = [task for task in asyncio.all_tasks() if task is not current]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        await loop.shutdown_asyncgens()
+
+    if gateway.is_alive():
+        asyncio.run_coroutine_threadsafe(drain(), loop).result(timeout=5)
+        loop.call_soon_threadsafe(loop.stop)
+        gateway.join(5)
+    else:
+        loop.run_until_complete(drain())
+    assert not gateway.is_alive()
+    loop.close()
+
+
 @pytest.mark.parametrize("gateway_loop", [False, True])
 @pytest.mark.parametrize("phase", ["before_start", "resolution", "send", "revalidation"])
 def test_native_send_keeps_an_accepted_receipt_through_cancellation(monkeypatch, phase, gateway_loop):
@@ -161,8 +184,10 @@ def test_native_send_keeps_an_accepted_receipt_through_cancellation(monkeypatch,
 
     adapter = FakeAdapter()
     loop = asyncio.new_event_loop() if gateway_loop else None
+    gateway = None
     if loop is not None:
-        threading.Thread(target=loop.run_forever, daemon=True).start()
+        gateway = threading.Thread(target=loop.run_forever, daemon=True)
+        gateway.start()
     runner = SimpleNamespace(_gateway_loop=loop)
     monkeypatch.setattr(senders, "_live_adapter", lambda *a, **kw: (runner, adapter))
     if phase == "before_start" and loop is not None:
@@ -195,8 +220,8 @@ def test_native_send_keeps_an_accepted_receipt_through_cancellation(monkeypatch,
     finally:
         release.set()
         unblock.set()
-        if loop is not None:
-            loop.call_soon_threadsafe(loop.stop)
+        if loop is not None and gateway is not None:
+            _finish_gateway_loop(loop, gateway)
     accepted = {
         "success": True, "platform": "matrix", "chat_id": "!room:example.org",
         "message_id": "$accepted", "chat_type": "group",
@@ -211,11 +236,30 @@ def test_native_send_keeps_an_accepted_receipt_through_cancellation(monkeypatch,
 
 
 @pytest.mark.parametrize("gateway_state", ["blocked", "stopped", "closed"])
-def test_cron_send_bound_releases_a_stuck_gateway_dispatch(monkeypatch, gateway_state):
+def test_cron_send_bound_releases_a_stuck_gateway_dispatch(monkeypatch, gateway_state, *, _closed_probe=False):
     """Cron bounds a standalone send with wait_for (#115469). A Matrix send dispatched to a
     gateway loop that cannot finish it must still end with TimeoutError at that bound."""
     from gateway.session_identity import replace_source
     from tools import send_message_tool
+
+    if gateway_state == "closed" and not _closed_probe:
+        # A closed owner loop cannot drain pending tasks. The probe process exits after
+        # checking the caller, so its abandoned tasks cannot affect the other cases.
+        probe = """import os, runpy, sys, pytest
+namespace = runpy.run_path(sys.argv[1])
+namespace["test_cron_send_bound_releases_a_stuck_gateway_dispatch"](
+    pytest.MonkeyPatch(), "closed", _closed_probe=True)
+sys.stdout.flush()
+sys.stderr.flush()
+os._exit(0)
+"""
+        result = subprocess.run(
+            [sys.executable, "-W", "error::RuntimeWarning", "-c", probe, str(Path(__file__).resolve())],
+            env={**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)},
+            capture_output=True, text=True, timeout=15,
+        )
+        assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
+        return
 
     monkeypatch.setattr(send_message_tool, "_CANCELLED_SEND_GRACE_SECONDS", 0.2)
     loop = asyncio.new_event_loop()
@@ -267,7 +311,7 @@ def test_cron_send_bound_releases_a_stuck_gateway_dispatch(monkeypatch, gateway_
         unblock.set()
         hold.set()
         if not loop.is_closed():
-            loop.call_soon_threadsafe(loop.stop)
+            _finish_gateway_loop(loop, gateway)
     assert (worker.is_alive(), outcome) == (False, ["TimeoutError"])
 
 
@@ -305,10 +349,12 @@ def test_cancelled_caller_sends_no_further_chunks(monkeypatch, gateway_loop):
             return SendResult(success=True, message_id=f"$chunk{len(sent)}")
 
     loop = None
+    gateway = None
     live = (None, None)
     if gateway_loop:
         loop = asyncio.new_event_loop()
-        threading.Thread(target=loop.run_forever, daemon=True).start()
+        gateway = threading.Thread(target=loop.run_forever, daemon=True)
+        gateway.start()
         live = (SimpleNamespace(_gateway_loop=loop), ChunkAdapter())
     monkeypatch.setattr(matrix, "MatrixAdapter", ChunkAdapter)
     monkeypatch.setattr(senders, "_live_adapter", lambda *a, **kw: live)
@@ -333,8 +379,8 @@ def test_cancelled_caller_sends_no_further_chunks(monkeypatch, gateway_loop):
         result = asyncio.run(asyncio.wait_for(scenario(), timeout=5))
     finally:
         hold.set()
-        if loop is not None:
-            loop.call_soon_threadsafe(loop.stop)
+        if loop is not None and gateway is not None:
+            _finish_gateway_loop(loop, gateway)
     assert chunks > 1
     assert (result, len(sent)) == (
         {"error": f"send cancelled after 1 of {chunks} chunks were delivered", "message_id": "$chunk1"},
