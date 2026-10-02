@@ -127,6 +127,7 @@ from plugins.platforms.matrix.effective_event import event_content, event_unsign
 from plugins.platforms.matrix.rich_content import MatrixRichContentMixin, has_media_url, native_event_context
 from plugins.platforms.matrix.context_mixin import MatrixContextMixin
 from plugins.platforms.matrix.redaction_mixin import MatrixRedactionMixin
+from plugins.platforms.matrix.pending_replay import MatrixPendingReplayMixin
 from plugins.platforms.matrix.intake_mixin import MatrixIntakeMixin
 from plugins.platforms.matrix.adapter_media import MatrixMediaMixin
 from plugins.platforms.matrix.inbound_events import MatrixInboundEventMixin
@@ -713,7 +714,7 @@ from plugins.platforms.matrix.invites import MatrixInvitesMixin
 from plugins.platforms.matrix.delivery import MatrixDeliveryMixin
 
 
-class MatrixAdapter(MatrixDeliveryMixin, MatrixInboundEventMixin, MatrixMediaMixin, MatrixInvitesMixin, MatrixIntakeMixin, MatrixRedactionMixin, MatrixFollowupMixin, MatrixRichContentMixin, MatrixContextMixin, BasePlatformAdapter):
+class MatrixAdapter(MatrixDeliveryMixin, MatrixInboundEventMixin, MatrixMediaMixin, MatrixInvitesMixin, MatrixPendingReplayMixin, MatrixIntakeMixin, MatrixRedactionMixin, MatrixFollowupMixin, MatrixRichContentMixin, MatrixContextMixin, BasePlatformAdapter):
     """Gateway adapter for Matrix (any homeserver)."""
 
     supports_code_blocks = True  # Matrix renders fenced code blocks (HTML/markdown)
