@@ -45,6 +45,8 @@ def _set_dm(adapter, room_id="!room1:example.org", is_dm=True):
     adapter._client.state_store.has_full_member_list = AsyncMock(return_value=True)
     adapter._client.state_store.get_members = AsyncMock(return_value=members)
     adapter._client.state_store.get_member_profiles = AsyncMock(return_value={})
+    adapter._client.state_store.get_power_levels = AsyncMock(return_value=None)
+    adapter._client.state_store.get_create = AsyncMock(return_value=None)
     adapter._client.get_joined_members = AsyncMock(return_value={})
 
 

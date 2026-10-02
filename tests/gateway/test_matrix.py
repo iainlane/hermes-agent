@@ -3224,7 +3224,7 @@ class TestMatrixRoomConfiguration:
         ],
     )
     async def test_configured_room_options_are_attached_to_inbound_event(
-        self, msgtype, expected_type
+        self, msgtype, expected_type, tmp_path
     ):
         self.adapter.config.extra["channel_prompts"] = {
             "!room:example.org": "Research mode",
@@ -3244,7 +3244,10 @@ class TestMatrixRoomConfiguration:
                 relates_to={},
             )
         else:
-            source_content.update(body="chart.png", url="", info={})
+            cached = tmp_path / "chart.png"
+            cached.write_bytes(b"cached room image")
+            self.adapter._download_and_cache_media = AsyncMock(return_value=str(cached))
+            source_content.update(body="chart.png", url="mxc://example.org/chart", info={})
             await self.adapter._handle_media_message(
                 room_id="!room:example.org",
                 sender="@alice:example.org",
@@ -5837,7 +5840,7 @@ class TestMatrixSourcePermalink:
             relates_to=relates_to or {},
         )
         assert ctx is not None
-        return ctx[5]
+        return ctx[-1]
 
     @pytest.mark.parametrize(
         ("room_id", "event_id", "via", "expected"),
