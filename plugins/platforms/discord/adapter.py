@@ -983,9 +983,10 @@ from plugins.platforms.discord.inbound_context import DiscordInboundContextMixin
 
 from plugins.platforms.discord.platform_events import DiscordPlatformEventsMixin
 
+from plugins.platforms.discord.pending_replay import DiscordPendingReplayMixin
 from plugins.platforms.discord.access_policy import DiscordAccessPolicyMixin
 
-class DiscordAdapter(DiscordAccessPolicyMixin, DiscordPlatformEventsMixin, DiscordInboundContextMixin, DiscordMediaMixin, BasePlatformAdapter):
+class DiscordAdapter(DiscordPendingReplayMixin, DiscordAccessPolicyMixin, DiscordPlatformEventsMixin, DiscordInboundContextMixin, DiscordMediaMixin, BasePlatformAdapter):
     """Discord bot adapter: guild/DM messages, threads, slash commands, button approvals, reactions."""
 
     MAX_MESSAGE_LENGTH = 2000

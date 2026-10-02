@@ -18,18 +18,21 @@ from gateway.shutdown_pending_codec import decode_pending_event
 logger = logging.getLogger("gateway.run")
 
 
-def bind_spooled_event(runner: Any, adapter: Any, event: MessageEvent, home: Path, session_key: str) -> bool:
+def bind_spooled_event(
+    runner: Any, adapter: Any, event: MessageEvent, home: Path, session_key: str, *, reset_authorization: bool = True,
+) -> bool:
     owner = gateway_input_owner(event, event.source)
     if event.internal or event.source.delivered_via_upstream_relay:
         return False
     clear_identity(event.source)
-    event.source.role_authorized = False
+    if reset_authorization:
+        event.source.role_authorized = False
     current = canonical_identity(event.source, runner=runner, adapter=adapter)
     if (current is None or current.adapter() is not adapter or current.runtime_home.resolve() != home
             or runner._session_key_for_source(event.source) != session_key
             or gateway_input_owner(event, event.source) != owner):
         return False
-    return all(bind_spooled_event(runner, adapter, part, home, session_key) for part, _merge in event._merged_parts)
+    return all(bind_spooled_event(runner, adapter, part, home, session_key, reset_authorization=reset_authorization) for part, _merge in event._merged_parts)
 
 
 def withdraw_spooled_pending(runner: Any, adapter: Any, withdraw: Withdraw) -> bool:
