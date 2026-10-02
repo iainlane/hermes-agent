@@ -1297,13 +1297,14 @@ class GatewayInboundMixin(GatewayInboundContextMixin, GatewayInboundAdmissionMix
             # Turn lease is keyed by (routing key, run generation) so this unwind can only free
             # the lease its own turn acquired, never a newer turn's.
             self._release_turn_lease(_quick_key, _run_generation)
-            # Adapter-owned markers remain until the final reply is durably recorded.
-            if not getattr(event, "_turn_marker_handoff", False):
-                await self._clear_durable_active_turn(event)
-            # Last: the completion awaits the platform, and a second cancellation there must not
-            # skip the releases above.
-            if _rescued_event is not None:
-                await self._complete_rescued_event(_rescued_event, _rescued_outcome)
+            try:
+                # Adapter-owned markers remain until the final reply is durably recorded.
+                if not getattr(event, "_turn_marker_handoff", False):
+                    await self._clear_durable_active_turn(event)
+            finally:
+                # Completion awaits the platform; cancellation there must not skip ownership releases.
+                if _rescued_event is not None:
+                    await self._complete_rescued_event(_rescued_event, _rescued_outcome)
 
     def _restore_pending_one_turn_model_override(self, session_key: str, run_generation: int | None = None) -> None:
         """Restore the per-session model override captured by ``/model --once`` or ``/moa``.
