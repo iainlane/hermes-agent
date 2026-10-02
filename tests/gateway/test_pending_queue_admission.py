@@ -67,14 +67,41 @@ def _setup(depth, monkeypatch: pytest.MonkeyPatch):
 @pytest.mark.parametrize("path", [
     "fifo", "normal", "queue", "steer", "grace", "debounce", "reserved", "redispatch",
     "redispatch-arrival", "redispatch-rewrite", "redispatch-idless", "cancel-before",
-    "cancel-admission", "cancel-claimed", "cancel-claim-race", "cancel-claim-complete", "cancel-claim-replaced", "reservation-replaced",
+    "cancel-admission", "cancel-claimed", "cancel-claim-race", "cancel-claim-complete", "cancel-claim-replaced", "reservation-replaced", "cancel-fresh-before", "cancel-fresh-after", "cancel-fresh-rewrite", "cancel-fresh-after-buffer",
 ])
 async def test_admission_at_capacity_preserves_the_complete_fifo(path, monkeypatch):
-    adapter, runner, expected = _setup(31 if path == "reserved" else 32, monkeypatch)
+    adapter, runner, expected = _setup(0 if path in {"cancel-fresh-before", "cancel-fresh-rewrite"} else 31 if path in {"reserved", "cancel-fresh-after-buffer"} else 32, monkeypatch)
     incoming = _make_event("later", chat_type="group", user_id="new-user")
     reply = None
     arrival_accepted = None
     try:
+        if path.startswith("cancel-fresh-"):
+            if path == "cancel-fresh-after-buffer":
+                buffered = _make_event("buffered", chat_type="group", user_id="buffered-user")
+                assert await adapter._queue_text_debounce("shared", buffered)
+                expected.append(deepcopy(buffered))
+            adapter._start_session_processing(incoming, "shared")
+            if path in {"cancel-fresh-before", "cancel-fresh-rewrite"}:
+                queued = [_make_event(f"queued-{i}", chat_type="group", user_id=f"user-{i}") for i in range(31)]
+                for value in queued:
+                    runner._enqueue_fifo("shared", value, adapter)
+                expected = [deepcopy(incoming), *deepcopy(queued)]
+            else:
+                expected.append(deepcopy(incoming))
+            if path == "cancel-fresh-rewrite":
+                from gateway.platforms.base_pending import pending_dispatch_record
+                record = pending_dispatch_record(adapter, "shared", incoming)
+                assert record is not None
+                copied = replace(incoming)
+                record.bind(copied)
+                runner._restore_pending_dispatch("shared", copied, adapter)
+                await adapter.cancel_session_processing("shared", discard_pending=False)
+            else:
+                await adapter.cancel_session_processing("shared", discard_pending=False)
+            refused = _make_event("refused", chat_type="group", user_id="later-user")
+            accepted = runner._enqueue_fifo("shared", refused, adapter)
+            assert (_events(adapter, runner), accepted, adapter._pending_dispatch_reservations) == (expected, False, {})
+            return
         if path.startswith("cancel-") or path == "reservation-replaced":
             attempted = adapter._pending_messages.pop("shared")
             adapter._stage_next_queued_event("shared", attempted)
