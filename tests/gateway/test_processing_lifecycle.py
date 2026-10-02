@@ -402,7 +402,7 @@ async def _walk_lifecycle(monkeypatch, tmp_path, walk: _Walk) -> list:
     adapter.platform = Platform.SLACK
     runner.adapters[Platform.SLACK] = adapter
     adapter.set_message_handler(runner._handle_message)
-    adapter._requeue_backoff_delay = lambda *_args: 3600  # the runner's turn drains a queued message
+    monkeypatch.setattr(adapter, "_requeue_backoff_delay", lambda *_args: 3600)  # the runner's turn drains a queued message
     source = SessionSource(platform=Platform.SLACK, chat_id="C1", chat_type="dm", user_id="U1")
     key = runner._session_key_for_source(source)
     if walk.placement in {"cap", "cap-goal"}:
@@ -874,7 +874,7 @@ async def test_teardown_completes_parked_messages_after_cancelling_and_flushing(
     adapter.platform = Platform.SLACK
     runner.adapters[Platform.SLACK] = adapter
     adapter.set_message_handler(runner._handle_message)
-    adapter._requeue_backoff_delay = lambda *_args: 3600
+    monkeypatch.setattr(adapter, "_requeue_backoff_delay", lambda *_args: 3600)
     source, key, _receiver, _running = _running_slack_turn(runner, finished=False)
     await adapter.handle_message(MessageEvent(text="q1", source=source, message_id="queued-1"))
     await asyncio.wait_for(asyncio.shield(adapter._session_tasks[key]), 30)
@@ -1041,7 +1041,7 @@ async def test_profile_removal_completes_its_started_messages_in_the_runners_fif
     runner._profile_adapters = {"work": {Platform.SLACK: adapter}}
     runner._served_profile_homes, runner._served_profile_signatures = {"work": tmp_path}, {}
     source = SessionSource(platform=Platform.SLACK, chat_id="C1", chat_type="dm", user_id="U1")
-    source._transport_adapter_ref = weakref.ref(adapter)
+    setattr(source, "_transport_adapter_ref", weakref.ref(adapter))
     key = runner._session_key_for_source(source)
     for index in (1, 2):
         event = MessageEvent(text=f"q{index}", source=source, message_id=f"queued-{index}")

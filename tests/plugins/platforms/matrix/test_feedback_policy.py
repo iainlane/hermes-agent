@@ -777,7 +777,8 @@ async def test_each_turn_acknowledges_the_input_that_it_processed(monkeypatch, t
         feedback.append(("react", event_id, emoji))
         return "$reaction"
 
-    adapter.send, adapter._send_reaction = send, react
+    monkeypatch.setattr(adapter, "send", send)
+    monkeypatch.setattr(adapter, "_send_reaction", react)
     adapter._background_read_receipt = lambda room_id, event_id: feedback.append(("read", event_id))
     runner = _busy_runner(monkeypatch, adapter, scenario.busy_mode)
     adapter.set_message_handler(runner._handle_message)

@@ -54,7 +54,7 @@ async def test_input_during_opening_delivery_runs_after_the_fifo(
 
     adapter._client = MagicMock()
     adapter._client.send_message_event = AsyncMock(side_effect=send_event)
-    adapter.send = MatrixAdapter.send.__get__(adapter)
+    monkeypatch.setattr(adapter, "send", MatrixAdapter.send.__get__(adapter))
 
     def model_response(_agent, request, **_kwargs):
         index = len(requests)
@@ -113,10 +113,10 @@ async def test_input_during_opening_delivery_runs_after_the_fifo(
         skip_context_files=True,
         skip_background_review=True,
     )
-    agent._disable_streaming = True
+    monkeypatch.setattr(agent, "_disable_streaming", True, raising=False)
 
     def fresh_agent(turn_runner, *_args):
-        agent.session_id = turn_runner._ctx.session_id
+        monkeypatch.setattr(agent, "session_id", turn_runner._ctx.session_id, raising=False)
         return agent
 
     async def copy_inbound(event, _source):
