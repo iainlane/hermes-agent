@@ -529,7 +529,7 @@ class _GatewayRun:
 
     def __init__(self, make_coro):
         self._make_coro = make_coro
-        self._task = None
+        self._task: asyncio.Task | None = None
         self._cancelled = False
 
     async def run(self):
@@ -544,7 +544,6 @@ class _GatewayRun:
             self._task.cancel()
 
 
-# How long a cancelled caller waits for the gateway-side send to report its outcome.
 _CANCELLED_SEND_GRACE_SECONDS = 5.0
 
 
@@ -646,7 +645,8 @@ async def _send_chunks(chunks, send_one):
         result = await send_one(chunk, i == len(chunks) - 1)
         if isinstance(result, dict) and result.get("error"):
             break
-        if i < len(chunks) - 1 and asyncio.current_task().cancelling():
+        task = asyncio.current_task()
+        if i < len(chunks) - 1 and task is not None and task.cancelling():
             return {"error": f"send cancelled after {i + 1} of {len(chunks)} chunks were delivered",
                     "message_id": result.get("message_id") if isinstance(result, dict) else None}
     return result
