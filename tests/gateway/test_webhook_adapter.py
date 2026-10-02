@@ -979,6 +979,7 @@ class TestCrossPlatformDeliveryMirror:
         room = "!reports:example.org"
         db = SessionDB(db_path=default_home / "state.db")
         db.create_session("matrix-room", source="matrix")
+        assert db._conn is not None
         db._conn.execute("UPDATE sessions SET session_key=?, chat_id=?, user_id=? WHERE id=?",
                          (f"agent:main:matrix:group:{room}:@alice:example.org", room,
                           "@alice:example.org", "matrix-room"))

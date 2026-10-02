@@ -262,8 +262,10 @@ def test_media_only_output_resends_only_undelivered_attachments(tmp_path, outcom
 def test_confirmation_timeout_skips_continuation_bookkeeping():
     """A send that is still in flight after the confirmation timeout counts as delivered, but
     nothing confirms it, so cron neither seeds nor mirrors the reply session."""
-    job = {**_job(thread_id="99"), "attach_to_session": True}
-    job["origin"]["user_id"] = "42"
+    job: dict[str, object] = {**_job(thread_id="99"), "attach_to_session": True}
+    origin = job["origin"]
+    assert isinstance(origin, dict)
+    origin["user_id"] = "42"
     mirrored = []
 
     def mirror(*args, **kwargs):
