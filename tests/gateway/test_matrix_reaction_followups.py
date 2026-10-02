@@ -1279,6 +1279,7 @@ def test_split_matrix_send_reports_every_delivered_event():
     from unittest.mock import AsyncMock
 
     from plugins.platforms.matrix.adapter import MatrixAdapter
+    from plugins.platforms.matrix.delivery import MatrixSendTarget
 
     async def exercise():
         adapter = object.__new__(MatrixAdapter)
@@ -1287,6 +1288,9 @@ def test_split_matrix_send_reports_every_delivered_event():
         adapter.truncate_message = lambda text, limit: ("abcd", "ef")
         adapter._build_text_message_content = lambda text: {"body": text}
         adapter._apply_relation_metadata = lambda *_args, **_kwargs: None
+        adapter._resolve_send_destination = AsyncMock(
+            return_value=MatrixSendTarget("!room:test", None, False, False)
+        )
         adapter._send_room_message = AsyncMock(side_effect=["$one", "$two"])
         result = await adapter.send("!room:test", "abcdef")
         assert (result.success, result.message_id, result.continuation_message_ids) == (

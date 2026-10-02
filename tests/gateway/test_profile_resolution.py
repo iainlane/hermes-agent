@@ -27,6 +27,7 @@ def mock_runner():
     # The identity seam the gate canonicalizes through; a hand-built source has no transport owner.
     runner._canonicalize = GatewayRunner._canonicalize.__get__(runner)
     runner._transport_owner = lambda _source: None
+    runner._delivery_adapter_for.return_value = None
     runner._primary_profile_name = "default"
     return runner
 
