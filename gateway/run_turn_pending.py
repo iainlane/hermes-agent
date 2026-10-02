@@ -118,11 +118,14 @@ class GatewayPendingDrainMixin:
             if pending_input is not None:
                 from copy import copy
                 steer_event = copy(pending_input)
-                steer_event.text = leftover_steer
+                if not hasattr(steer_event, "_gateway_pending_stt_text"):
+                    steer_event.text = leftover_steer
                 if not pending_input.media_urls:
                     steer_event.message_type = MessageType.TEXT
                 if hasattr(steer_event, "_gateway_pending_stt_text"):
-                    steer_event._gateway_pending_stt_text = leftover_steer
+                    setattr(steer_event, "_gateway_pending_stt_text", leftover_steer)
+                    if hasattr(steer_event, "_gateway_pending_stt_input"):
+                        del steer_event._gateway_pending_stt_input
             if not pending and not pending_event:
                 pending = leftover_steer
                 pending_event = steer_event

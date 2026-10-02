@@ -13,6 +13,7 @@ import time
 from gateway.platforms.base import BasePlatformAdapter
 from gateway.platforms.event import MessageEvent, MessageType
 from plugins.platforms.matrix.relations import MatrixRelation
+from plugins.platforms.matrix.adapter_feedback import ReadReceiptMode
 from plugins.platforms.matrix.reply_context import MatrixEventContext, MatrixEventContextCache
 from plugins.platforms.matrix.sync_transport import (
     DurableSyncStore, SyncCheckpoints, SyncDispatch, create_sync_client, is_invalid_sync_cursor,
@@ -29,6 +30,7 @@ logger = logging.getLogger("plugins.platforms.matrix.adapter")
 
 class MatrixIntakeMixin(BasePlatformAdapter):
     _client: Any
+    _read_receipts_mode: ReadReceiptMode
     _event_context_cache: MatrixEventContextCache
     _parked_voices: ParkedVoices
     _text_batch_intakes: dict[int, list[tuple[str, asyncio.Future[bool]]]]
@@ -82,7 +84,6 @@ class MatrixIntakeMixin(BasePlatformAdapter):
     async def _handle_text_message(
         self, room_id: str, sender: str, event_id: str, event_ts: float, source_content: dict,
         relates_to: dict, *, reply_parent: MatrixEventContext | None = None) -> asyncio.Future[bool] | bool | None:
-        from plugins.platforms.matrix.adapter_feedback import ReadReceiptMode
         from plugins.platforms.matrix.adapter import _normalize_matrix_bang_command
 
         body = source_content.get("body", "") or ""
