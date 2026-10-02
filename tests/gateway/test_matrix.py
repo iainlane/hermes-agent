@@ -558,6 +558,7 @@ class TestMatrixResolveSendTarget:
         await self.adapter.send("#general:example.org", "hello")
 
         call_args = client.send_message_event.await_args
+        assert call_args is not None
         assert str(call_args.args[0]) == "!resolved:example.org"
 
 

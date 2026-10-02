@@ -209,8 +209,10 @@ async def test_standalone_checks_destination_and_encryption(case):
     await runner.setup()
     site = web.TCPSite(runner, "127.0.0.1", 0)
     await site.start()
-    port = site._server.sockets[0].getsockname()[1]
-    config = SimpleNamespace(
+    server = site._server
+    assert isinstance(server, asyncio.Server)
+    port = server.sockets[0].getsockname()[1]
+    config = PlatformConfig(
         token="token",
         extra={
             "homeserver": f"http://127.0.0.1:{port}",
@@ -300,7 +302,7 @@ def test_send_matrix_threaded_reply_uses_m_thread_relates_to():
     with patch.dict(sys.modules, {"aiohttp": fake_aiohttp}):
         result = asyncio.run(
             standalone_send(
-                SimpleNamespace(token="tok", extra={"homeserver": "https://matrix.example.com"}),
+                PlatformConfig(token="tok", extra={"homeserver": "https://matrix.example.com"}),
                 "!room:example.com",
                 "in the thread",
                 thread_id="$thread-root",
@@ -363,7 +365,7 @@ def test_send_matrix_resolves_room_alias_before_send():
     with patch.dict(sys.modules, {"aiohttp": fake_aiohttp}):
         result = asyncio.run(
             standalone_send(
-                SimpleNamespace(token="tok", extra={"homeserver": "https://matrix.example.com"}),
+                PlatformConfig(token="tok", extra={"homeserver": "https://matrix.example.com"}),
                 "#general:example.com",
                 "hi",
             )

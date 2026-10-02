@@ -468,6 +468,7 @@ def test_failure_report_names_the_configured_thread_once(
             runner.adapters,
             SimpleNamespace(is_running=lambda: True),
         )
+    assert error is not None
     assert re.findall(r"(?:delivery to|\(target) (matrix:\S+?)(?= failed|\))", error) == [label, label]
 
 

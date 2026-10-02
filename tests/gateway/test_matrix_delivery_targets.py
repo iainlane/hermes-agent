@@ -79,6 +79,7 @@ async def test_explicit_target_resolution_precedes_native_send(case):
         return
 
     assert not result.success
+    assert result.error is not None
     assert target in result.error
     expected = {
         "lookup_error": "directory unavailable",
@@ -378,6 +379,7 @@ async def test_ordinary_sends_use_the_synced_encryption_state(
     assert (result.success, sent) == expected, result.error
     client.get_state_event.assert_not_awaited()
     if not result.success:
+        assert result.error is not None
         assert "encrypted" in result.error
 
 
