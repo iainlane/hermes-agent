@@ -102,6 +102,7 @@ def test_ticker_manual_run_and_interrupt_notice_share_delivery_policy(delivery_p
 
     asyncio.run(notify())
     selected = own if owned else primary
+    assert selected is not None
     assert [str(chat) for chat, _text, _metadata in selected.sent_calls] == (
         ["100", "200", "999"] * 3 if owned else ["100", "200", "100"])
     assert get_hermes_home() not in homes.values()

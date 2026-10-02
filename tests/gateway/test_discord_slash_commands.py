@@ -657,8 +657,9 @@ async def test_native_help_query_reaches_the_shared_help_executor(adapter, monke
     adapter._register_slash_commands()
     callback = adapter._client.tree.commands["help"]
     signature = inspect.signature(callback)
-    assert (tuple(signature.parameters), signature.parameters.get("query").default
-            if "query" in signature.parameters else None) == (("interaction", "query"), "")
+    query_parameter = signature.parameters.get("query")
+    assert query_parameter is not None
+    assert (tuple(signature.parameters), query_parameter.default) == (("interaction", "query"), "")
     interaction = SimpleNamespace(
         channel=_FakeTextChannel(channel_id=123, name="general"), channel_id=123, guild_id=456,
         user=SimpleNamespace(id=42, name="Tester", display_name="Tester"),
@@ -668,7 +669,9 @@ async def test_native_help_query_reaches_the_shared_help_executor(adapter, monke
 
     await callback(interaction, query=query)
 
-    event = adapter.handle_message.await_args.args[0]
+    awaited = adapter.handle_message.await_args
+    assert awaited is not None
+    event = awaited.args[0]
     assert (event.text, event.get_command_args()) == (f"/help {query}".strip(), query)
     reply = execute_command("help", CommandContext(surface="gateway", args=event.get_command_args())).text
     if query == "skills":

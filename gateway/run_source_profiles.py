@@ -4,13 +4,18 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Callable, Optional
 
+from gateway.config import GatewayConfig
 from gateway.session import SessionSource
 
 logger = logging.getLogger("gateway.run")
 
 
 class GatewaySourceProfilesMixin:
+    config: GatewayConfig
+    _profile_name_for_source: Callable[[SessionSource], Optional[str]]
+
     def _resolve_profile_home_for_source(self, source: SessionSource) -> "Path":
         """Resolve which profile's HERMES_HOME serves this source: the pinned identity's runtime
         home, else ``source.profile``, then ``_profile_name_for_source`` (sources bypassing

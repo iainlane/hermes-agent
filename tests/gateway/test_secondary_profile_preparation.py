@@ -18,6 +18,7 @@ async def test_secondary_profile_load_keeps_loop_available_and_scopes_plugins(tm
     from gateway.run import GatewayRunner, _profile_runtime_scope
     from hermes_cli.plugins import discover_plugins, get_plugin_manager
     from hermes_constants import get_hermes_home
+    from tests.gateway.restart_test_helpers import RestartTestAdapter
 
     home = tmp_path / ".hermes"
     profiles = [home / "profiles" / name for name in ("first", "second")]
@@ -59,10 +60,11 @@ def register(ctx):
     runner._profile_adapters = {}
     loop_thread = threading.get_ident()
 
-    def rewire():
-        rewired.append((get_hermes_home(), threading.get_ident()))
+    class PreparationAdapter(RestartTestAdapter):
+        def rewire_plugin_handlers(self) -> None:
+            rewired.append((get_hermes_home(), threading.get_ident()))
 
-    runner._profile_adapters["first"] = {Platform.TELEGRAM: SimpleNamespace(rewire_plugin_handlers=rewire)}
+    runner._profile_adapters["first"] = {Platform.TELEGRAM: PreparationAdapter()}
     context = set_multiplex_context(True)
     before = dict(os.environ)
 
@@ -92,11 +94,13 @@ def register(ctx):
             (profiles[0] / "config.yaml").write_text(yaml.safe_dump(cfg))
             await asyncio.to_thread(discover_plugins, force=True)
         await asyncio.sleep(0)
+        subscriptions = runner._plugin_rewire_unsubscribe
+        assert subscriptions is not None
         assert {
             "responsive": responsive,
             "loaded": loaded,
             "tokens": [cfg.platforms[Platform.TELEGRAM].token for cfg in (first, second, again)],
-            "subscriptions": set(runner._plugin_rewire_unsubscribe),
+            "subscriptions": set(subscriptions),
             "configured_hooks": initial_hooks > 0,
             "rewired": rewired,
             "ambient_home": get_hermes_home(),

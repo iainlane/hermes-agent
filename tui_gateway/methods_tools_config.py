@@ -1,5 +1,26 @@
 """Session tool configuration JSON-RPC handler."""
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .agent_callbacks import _reset_session_agent
+    from .compute_host_bridge import (
+        _apply_compute_host_metadata_mirror,
+        _send_compute_host_control,
+        _session_uses_compute_host,
+    )
+    from .methods_tools import _busy_error, _mcp_plugin_write_error, _mcp_server_rows, _tools_mod
+    from .model_switch import _session_profile_runtime_scope
+    from .server import (
+        ProfileUnavailableError,
+        _bind_build_profile_scopes,
+        _err,
+        _methods,
+        _ok,
+        _release_build_profile_scopes,
+        _sess_nowait,
+    )
+
 from .method_ctx import HandlerRegistry, bind_module
 
 _registry = HandlerRegistry()
