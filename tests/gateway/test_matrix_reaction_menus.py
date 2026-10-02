@@ -44,10 +44,10 @@ def test_explicit_matrix_bundle_enables_menus_only_for_matrix(platform, expected
     ("cli", True, False), ("telegram", True, False), ("api_server", True, False),
 ])
 def test_menu_toolset_requires_matrix_opt_in(platform, configured, expected):
-    from toolsets import resolve_multiple_toolsets
+    from toolsets import resolve_toolset
 
     config = {"platform_toolsets": {platform: ["reaction_menu"]}} if configured else {}
-    tools = resolve_multiple_toolsets(sorted(_get_platform_tools(config, platform)))
+    tools = {tool for name in _get_platform_tools(config, platform) for tool in resolve_toolset(name)}
     assert ("present_menu" in tools) is expected
 
 
@@ -64,6 +64,7 @@ async def test_menu_choice_is_scoped_and_consumed_once(monkeypatch, rejection):
     adapter._approval_require_sender = False
     adapter._client = SimpleNamespace()
     adapter.send = AsyncMock(return_value=SendResult(success=True, message_id="$menu"))
+    adapter.edit_message = AsyncMock(return_value=SendResult(success=True, message_id="$card"))
     adapter._send_reaction = AsyncMock(return_value="$seed")
     adapter._send_invalid_reaction_feedback = AsyncMock()
     clock = SimpleNamespace(now=100.0)
@@ -115,12 +116,12 @@ async def test_menu_choice_is_scoped_and_consumed_once(monkeypatch, rejection):
     # An approval card or model picker in the same room and session: a reaction on that card
     # with an emoji that the menu also offers resolves only the card.
     if rejection == "approval":
-        from plugins.platforms.matrix.adapter import _MatrixApprovalPrompt
-        prompt = _MatrixApprovalPrompt("lane", source.chat_id, "$card", requester_user_id=source.user_id)
+        from plugins.platforms.matrix.approval_lifecycle import _MatrixApprovalPrompt
+        prompt = _MatrixApprovalPrompt("lane", source.chat_id, "$card", "approval", requester_user_id=source.user_id)
         adapter._approval_prompts_by_event["$card"] = prompt
         approvals = []
         monkeypatch.setattr("tools.approval.resolve_gateway_approval",
-                            lambda key, choice: approvals.append((key, choice)) or 1)
+                            lambda key, choice, *, approval_id: approvals.append((key, choice)) or 1)
         adapter._redact_bot_approval_reactions = AsyncMock()
         bad.content.relates_to.event_id = "$card"
     if rejection == "picker":
@@ -137,7 +138,7 @@ async def test_menu_choice_is_scoped_and_consumed_once(monkeypatch, rejection):
         callback.assert_awaited_once_with(source.chat_id, "model")
     if rejection == "revoked":
         adapter.send.assert_awaited_with(
-            source.chat_id, "Only an authorized Matrix user can use these controls.", reply_to="$menu")
+            source.chat_id, "Only an authorized Matrix user can use these controls.", reply_to="$menu", metadata={"_notice_reply": True})
     if rejection in {"expired", "revoked"}:
         return
 
