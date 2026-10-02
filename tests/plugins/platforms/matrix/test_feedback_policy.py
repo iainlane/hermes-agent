@@ -552,6 +552,7 @@ async def test_lifecycle_disabled_keeps_reaction_controls(monkeypatch, control):
         await adapter._send_exec_approval_prompt(
             ExecApprovalPrompt(
                 session_key="session",
+                request_id="approval",
                 chat_id=room_id,
                 text="Approve command",
                 actions=[("Approve", "once", "primary"), ("Deny", "deny", "danger")],
