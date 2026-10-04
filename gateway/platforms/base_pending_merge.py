@@ -1,12 +1,20 @@
 """Merge operations for pending gateway events."""
 
-from typing import Dict, Optional
+from typing import Dict, Optional, overload
 
 from gateway.platforms.event import MessageEvent, MessageType
 from gateway.platforms.base_pending import merge_recorded
 
 
-def _append_text(existing: Optional[str], new: Optional[str]) -> str:
+@overload
+def _append_text(existing: Optional[str], new: str) -> str: ...
+
+
+@overload
+def _append_text(existing: Optional[str], new: Optional[str]) -> Optional[str]: ...
+
+
+def _append_text(existing: Optional[str], new: Optional[str]) -> Optional[str]:
     """``existing\\nnew`` when both non-empty; the non-empty one otherwise."""
     return f"{existing}\n{new}" if existing else new
 
