@@ -3432,6 +3432,7 @@ class DiscordAdapter(DiscordApprovalMixin, DiscordVoiceLifecycleMixin, DiscordPe
                     except Exception:
                         pass
                 completed = receiver.check_silence()
+                captured_for = self._voice_text_channels.get(guild_id)
                 # Pass guild so role checks stay guild-scoped.
                 _vc_guild = self._client.get_guild(guild_id) if self._client is not None else None
                 for user_id, pcm_data in completed:
@@ -3439,16 +3440,15 @@ class DiscordAdapter(DiscordApprovalMixin, DiscordVoiceLifecycleMixin, DiscordPe
                         continue
                     # User speech is activity too; keeps active listeners connected.
                     self._reset_voice_timeout(guild_id)
-                    await self._process_voice_input(guild_id, user_id, pcm_data)
+                    await self._process_voice_input(guild_id, user_id, pcm_data, captured_for)
         except asyncio.CancelledError:
             pass
         except Exception as e:
             logger.error("Voice listen loop error: %s", e, exc_info=True)
 
-    async def _process_voice_input(self, guild_id: int, user_id: int, pcm_data: bytes):
-        """Convert PCM -> WAV -> STT -> callback."""
+    async def _process_voice_input(self, guild_id: int, user_id: int, pcm_data: bytes, captured_for: int | None):
+        """Transcribe collected PCM and dispatch it if the text binding is unchanged."""
         from tools.voice_mode_transcript import is_whisper_hallucination
-        captured_for = self._voice_text_channels.get(guild_id)
         tmp_f = tempfile.NamedTemporaryFile(suffix=".wav", prefix="vc_listen_", delete=False)
         wav_path = tmp_f.name
         tmp_f.close()
@@ -3462,7 +3462,7 @@ class DiscordAdapter(DiscordApprovalMixin, DiscordVoiceLifecycleMixin, DiscordPe
             if not transcript or is_whisper_hallucination(transcript):
                 return
             logger.info("Voice input from user %d: %s", user_id, transcript[:100])
-            if self._voice_text_channels.get(guild_id) != captured_for:
+            if getattr(self, "_voice_text_channels", {}).get(guild_id) != captured_for:
                 logger.info("Dropping voice input from user %d: the voice binding moved during transcription",
                             user_id)
                 return

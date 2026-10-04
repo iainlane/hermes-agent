@@ -178,9 +178,10 @@ class DiscordVoiceLifecycleMixin:
         if listen_task:
             listen_task.cancel()
         guild = self._client.get_guild(guild_id) if self._client is not None else None
+        captured_for = self._voice_text_channels.get(guild_id)
         for user_id, pcm_data in pending_inputs:
             if self._is_allowed_user(str(user_id), guild=guild, is_dm=False):
-                await self._process_voice_input(guild_id, user_id, pcm_data)
+                await self._process_voice_input(guild_id, user_id, pcm_data, captured_for)
         # Tear down the mixer (stops the continuous outgoing stream).
         if getattr(self, "_voice_mixers", None) is not None:
             self._voice_mixers.pop(guild_id, None)
