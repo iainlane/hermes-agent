@@ -137,12 +137,14 @@ class GatewayPendingDrainMixin:
                         text=pending_steer, source=steer_source, channel_prompt=steer_prompt,
                     )
                 if adapter and session_key:
-                    if pending_input is None:
-                        steer_enqueued = self._enqueue_fifo(session_key, steer_event, adapter)
-                    else:
-                        self._enqueue_fifo(session_key, steer_event, adapter)
+                    steer_enqueued = self._enqueue_fifo(
+                        session_key, steer_event, adapter
+                    )
+                    if not steer_enqueued and pending_input is not None:
+                        self._restore_pending_dispatch(session_key, steer_event, adapter)
+                        self._park_event_lifecycle(steer_event)
                         steer_enqueued = True
-                if not steer_enqueued and pending_input is None:
+                if not steer_enqueued:
                     unadmitted_steer = pending_steer
             else:
                 pending_event, pending = steer_event, pending_steer
