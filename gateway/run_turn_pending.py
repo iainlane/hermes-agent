@@ -112,7 +112,7 @@ class GatewayPendingDrainMixin:
                     self._restore_pending_dispatch(session_key, pending_event, adapter)
                 raise
 
-        # Leftover /steer (arrived after the last tool batch): deliver as the next user turn.
+        unadmitted_steer = None
         leftover_steer = (result.get("pending_steer") or "").strip() if result else None
         if leftover_steer:
             if pending_input is not None:
@@ -126,67 +126,55 @@ class GatewayPendingDrainMixin:
                     setattr(steer_event, "_gateway_pending_stt_text", leftover_steer)
                     if hasattr(steer_event, "_gateway_pending_stt_input"):
                         del steer_event._gateway_pending_stt_input
-            if not pending and not pending_event:
-                pending = leftover_steer
-                pending_event = steer_event
-                logger.debug("Delivering leftover /steer as next turn: '%s...'", pending[:40])
-            elif pending_event and adapter and session_key and pending_input is None:
-                # User steered during the turn, but a background event or queued message arrived.
-                # Deliver the user's steer first and restore the pending event to the head of the queue.
-                overflow = self._overflow_queue(session_key)
-                if hasattr(adapter, "_pending_messages") and isinstance(adapter._pending_messages, dict):
-                    promoted = adapter._pending_messages.get(session_key)
-                    if promoted is not None:
-                        if overflow is not None:
-                            overflow.insert(0, promoted)
-                        else:
-                            self._session_state(session_key).conversation.queued_events.insert(0, promoted)
-                    adapter._pending_messages[session_key] = pending_event
-                else:
-                    if overflow is not None:
-                        overflow.insert(0, pending_event)
-                    else:
-                        self._session_state(session_key).conversation.queued_events.insert(0, pending_event)
-                release_pending_dispatch(adapter, session_key, pending_event)
-                pending_event = steer_event
-                pending = leftover_steer
-                logger.debug(
-                    "Delivering leftover /steer before queued event for session %s: '%s...'",
-                    session_key, pending[:40],
-                )
-            elif pending:
+            if pending_event is not None and pending_input is None and adapter and session_key:
+                self._restore_pending_dispatch(session_key, pending_event, adapter)
+                pending_event, pending = None, leftover_steer
+            elif pending or pending_event:
                 if steer_event is None:
-                    from gateway.platforms.base import MessageEvent
                     steer_prompt, steer_source = self._pinned_channel_inputs(
                         session_key, None, source, internal=True,
                     )
                     steer_event = MessageEvent(
                         text=leftover_steer, source=steer_source, channel_prompt=steer_prompt,
                     )
-                if session_key:
-                    self._enqueue_fifo(session_key, steer_event, adapter)
-                    steer_enqueued = True
-                logger.debug(
-                    "Enqueued leftover /steer behind pending message for session %s: '%s...'",
-                    session_key or "?", leftover_steer[:40],
-                )
+                if adapter and session_key:
+                    if pending_input is None:
+                        steer_enqueued = self._enqueue_fifo(session_key, steer_event, adapter)
+                    else:
+                        self._enqueue_fifo(session_key, steer_event, adapter)
+                        steer_enqueued = True
+                if not steer_enqueued and pending_input is None:
+                    unadmitted_steer = leftover_steer
+            else:
+                pending_event, pending = steer_event, leftover_steer
+                logger.debug("Delivering leftover /steer as next turn: '%s...'", pending[:40])
 
-        # Safety net: a pending slash command is never passed to the agent as user input.
-        if pending and pending.strip().startswith("/"):
-            _pending_cmd_word = pending.strip().split(None, 1)[0][1:].lower()
-            if _pending_cmd_word:
-                with suppress(Exception):
-                    from hermes_cli.commands import resolve_command as _rc_pending
-                    if _rc_pending(_pending_cmd_word):
-                        logger.info(
-                            "Discarding command '/%s' from pending queue — "
-                            "commands must not be passed as agent input", _pending_cmd_word,
-                        )
-                        await self._complete_discarded_event(pending_event)
-                        if pending_event is not None and session_key:
-                            release_pending_dispatch(adapter, session_key, pending_event)
-                        pending_event = None
-                        pending = None
+        pending_parts = [pending]
+        if unadmitted_steer is not None:
+            pending_parts.append(unadmitted_steer)
+        for position, pending_part in enumerate(pending_parts):
+            if not pending_part or not pending_part.strip().startswith("/"):
+                continue
+            command_word = pending_part.strip().split(None, 1)[0][1:].lower()
+            if not command_word:
+                continue
+            with suppress(Exception):
+                from hermes_cli.commands import resolve_command
+                if not resolve_command(command_word):
+                    continue
+                logger.info(
+                    "Discarding command '/%s' from pending queue, "
+                    "commands must not be passed as agent input", command_word,
+                )
+                if position == 0:
+                    await self._complete_discarded_event(pending_event)
+                    if pending_event is not None and session_key:
+                        release_pending_dispatch(adapter, session_key, pending_event)
+                    pending_event = None
+                pending_parts[position] = None
+        pending = pending_parts[0]
+        if unadmitted_steer is not None:
+            pending = "\n\n".join(part for part in pending_parts if part) or None
 
         if self._draining and (pending_event or pending):
             logger.info(
@@ -197,7 +185,7 @@ class GatewayPendingDrainMixin:
                 self._restore_pending_dispatch(session_key, pending_event, adapter)
             pending_event = None
             pending = None
-        if steer_event is not None and processing_event is not None and (
+        if steer_event is not None and processing_event is not None and pending_input is not None and (
                 steer_enqueued or pending_event is steer_event):
             self._hand_leftover_steer_to_its_turn(processing_event, steer_event, pending_inputs)
         return pending_event, pending
