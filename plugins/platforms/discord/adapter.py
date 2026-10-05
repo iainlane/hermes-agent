@@ -896,6 +896,13 @@ class VoiceReceiver:
                 self._last_packet_time.pop(ssrc, None)
         return completed
 
+    def discard_pending(self) -> None:
+        """Drop buffered PCM that no poll or flush has emitted yet."""
+        with self._lock:
+            self._buffers.clear()
+            self._last_packet_time.clear()
+
+
     # --- PCM -> WAV conversion (for Whisper STT) ---
 
     @staticmethod
@@ -3412,6 +3419,13 @@ class DiscordAdapter(DiscordApprovalMixin, DiscordVoiceLifecycleMixin, DiscordPe
 
     # UDP keepalive interval; Discord drops the UDP route after ~60s of silence.
     _KEEPALIVE_INTERVAL = 15
+
+    def discard_pending_voice_input(self, guild_id: int) -> None:
+        """Discard buffered PCM before changing the receiver's text channel."""
+        receiver = self._voice_receivers.get(guild_id)
+        if receiver is not None:
+            receiver.discard_pending()
+
 
     async def _voice_listen_loop(self, guild_id: int):
         """Periodically check for completed utterances and process them."""

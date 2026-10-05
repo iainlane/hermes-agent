@@ -157,6 +157,7 @@ class DiscordVoiceLifecycleMixin:
         if text_channel_id is not None:
             if previous is not None and previous != text_channel_id:
                 self._notify_voice_disconnect(previous)
+                self.discard_pending_voice_input(guild_id)
             self._voice_text_channels[guild_id] = text_channel_id
         if source is not None:
             self._voice_sources[guild_id] = source
