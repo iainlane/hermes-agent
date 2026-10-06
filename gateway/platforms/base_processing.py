@@ -289,7 +289,10 @@ class BaseProcessingMixin:
             _thread_metadata = _thread_metadata_for_event(event)
             event._turn_marker_handoff = self.gateway_runner is not None  # it can release the marker
             with pending_dispatch_scope(self, session_key, event):
-                response = await self._message_handler(event)
+                handler = self._message_handler
+                if handler is None:
+                    raise RuntimeError("No gateway message handler is installed")
+                response = await handler(event)
             # A muted diagnostic wake ran for the session; its reply is not presented. The
             # policy read binds the routed profile; delivery itself stays in the launch scope.
             with self._media_delivery_scope(event.source):
