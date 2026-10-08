@@ -323,4 +323,3 @@ async def test_session_policy_is_current_after_identity_resolution(
         {(room, "$current"): ["$earlier"]},
         1,
     )
-

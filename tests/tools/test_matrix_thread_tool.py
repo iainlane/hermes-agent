@@ -917,3 +917,51 @@ async def test_owner_loop_stop_bounds_waits_and_preserves_delivery_progress(
             owner.close()
 
         await asyncio.to_thread(drain)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("phase", "policy"), [
+    ("classification", "room"), ("keys", "room"), ("keys", "requester"),
+])
+async def test_thread_send_rechecks_policy_after_final_preparation(phase, policy):
+    from plugins.platforms.matrix.read_context import MatrixSessionAccess, MatrixSessionError
+
+    adapter = _adapter()
+    lookups = 0
+
+    def revoke():
+        if policy == "room":
+            adapter._allowed_room_ids = {"!other:server"}
+            return
+        adapter.set_authorization_check(lambda *_args, **_kwargs: False)
+
+    async def identify(_room, *, owner=None, require_classification=False):
+        if phase == "classification":
+            revoke()
+        return False
+
+    async def encryption_state(_room):
+        nonlocal lookups
+        lookups += 1
+        if phase == "keys" and lookups == 2:
+            revoke()
+        return False
+
+    wire = AsyncMock(return_value="$unexpected")
+    adapter._client = SimpleNamespace(
+        crypto=None, state_store=SimpleNamespace(is_encrypted=encryption_state),
+        send_message_event=wire,
+    )
+    adapter._is_dm_room = identify
+    access = MatrixSessionAccess.capture(adapter, ROOM, USER)
+
+    try:
+        result = {"event_id": await access.send_message({"msgtype": "m.text", "body": "Reply"})}
+    except MatrixSessionError as exc:
+        result = {"error": str(exc)}
+
+    assert (result, wire.await_count) == (
+        {"error": "Matrix room is not allowed or joined" if policy == "room"
+         else "Matrix requester is not authorized for this room"}, 0,
+    )
+
