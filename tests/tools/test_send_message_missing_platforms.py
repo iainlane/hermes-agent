@@ -2,6 +2,10 @@
 
 import asyncio
 import os
+import json
+import re
+
+import pytest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -357,3 +361,43 @@ class TestSendDingtalk:
         assert result["success"] is True
         call_kwargs = client.post.await_args
         assert "access_token=env" in call_kwargs[0][0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["expanded-html", "unicode-chunks", "thread-boundary", "escaped-controls"])
+async def test_standalone_transport_payloads_fit_the_matrix_event_limit(monkeypatch, case):
+    from plugins.platforms.matrix.standalone import _HTTPDelivery, _MatrixAPIError
+
+    payloads = []
+
+    async def request(self, method, path, **kwargs):
+        if path.endswith("/state/m.room.encryption"):
+            raise _MatrixAPIError(404, {"errcode": "M_NOT_FOUND"})
+        if path.endswith("/joined_members"):
+            return {"joined": {"@bot:server": {}, "@user:server": {}, "@other:server": {}}}
+        payloads.append(kwargs["json"])
+        return {"event_id": "$sent"}
+
+    monkeypatch.setattr(_HTTPDelivery, "request", request)
+    message = {"expanded-html": "safe", "unicode-chunks": "🧪" * 16000,
+               "thread-boundary": "&" * 7484, "escaped-controls": "\0" * 8000}[case]
+    thread_id = "$" + "t" * 200 if case == "thread-boundary" else "$root"
+    if case == "expanded-html":
+        monkeypatch.setattr("markdown.markdown", lambda *_args, **_kwargs: "<p>" + "x" * 45000 + "</p>")
+    delivery = _HTTPDelivery(None, "https://matrix.test")
+    await delivery.send("!room:server", message, thread_id=thread_id)
+
+    assert payloads
+    bodies = [re.sub(r" \(\d+/\d+\)$", "", payload["body"]) for payload in payloads]
+    assert "".join(bodies) == message
+    assert all(len(json.dumps(payload).encode("utf-8")) <= 45000
+               for payload in payloads)
+    assert [payload["m.relates_to"] for payload in payloads] == [{
+        "rel_type": "m.thread", "event_id": thread_id, "is_falling_back": True,
+        "m.in_reply_to": {"event_id": thread_id},
+    }] * len(payloads)
+    if case == "expanded-html":
+        assert payloads == [{"msgtype": "m.text", "body": "safe", "m.relates_to": {
+            "rel_type": "m.thread", "event_id": thread_id, "is_falling_back": True,
+            "m.in_reply_to": {"event_id": thread_id},
+        }}]
