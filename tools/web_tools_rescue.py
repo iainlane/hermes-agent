@@ -7,6 +7,8 @@ rescue-served response, or the one-shot rescue becomes sticky for a whole TTL. L
 """
 
 import logging
+from agent.web_acquisition import WebAttempt
+from agent.web_acquisition_errors import WebUnclassifiedFailure, acquisition_error
 
 logger = logging.getLogger("tools.web_tools")
 
@@ -47,7 +49,7 @@ def _ring_vendor_keyless(name: str) -> bool:
     return use_keyless(name, get_provider_env(key_var) if key_var else "")
 
 
-def _managed_search_fallback(provider, original_error: str, query: str, limit: int):
+def _managed_search_fallback(provider, original_error: str, query: str, limit: int, *, attempts: list[WebAttempt] | None = None):
     """Try managed Firecrawl for this call only; None leaves the original error for keyless rescue."""
     from agent.web_search_provider import get_provider_env
     from tools.web_tools import _managed_web_search
@@ -55,11 +57,15 @@ def _managed_search_fallback(provider, original_error: str, query: str, limit: i
             or get_provider_env("PERPLEXITY_API_KEY") or not _managed_web_search()):
         return None
     logger.warning("web_search managed Perplexity failed (%s); serving this call from managed Firecrawl", (original_error or "")[:200])
+    from tools.web_tools_search import checked_search_response, search_attempts
     try:
         from agent.web_search_registry import get_provider
         resp = get_provider("firecrawl").search(query, limit)
     except Exception as exc:  # noqa: BLE001 — fallback is best-effort
-        resp = {"success": False, "error": str(exc)}
+        resp = {"success": False, "error": str(exc), "failure": acquisition_error(exc).to_failure()}
+    resp = checked_search_response(resp)
+    if attempts is not None:
+        attempts.extend(search_attempts(resp, "firecrawl", "managed-fallback"))
     if not resp.get("success"):
         logger.warning("managed Firecrawl fallback failed too: %s", str(resp.get("error", ""))[:200])
         return None
@@ -89,14 +95,23 @@ def _rescue_eligible(provider) -> bool:
         return False
 
 
-def _rescue_search(provider_name: str, original_error: str, query: str, limit: int) -> dict:
+def _rescue_search(provider_name: str, original_error: str, query: str, limit: int, *, attempts: list[WebAttempt] | None = None) -> dict:
     """Rescue a failed search via the ring; annotate the result with the original failure."""
     from plugins.web.keyless_mcp import search_with_failover
     logger.warning(
         "web_search backend '%s' failed (%s); one-shot keyless rescue",
         provider_name, (original_error or "")[:200],
     )
-    rescued = search_with_failover(provider_name, query, limit)
+    from tools.web_tools_search import checked_search_response, search_attempts
+    rescued: dict
+    try:
+        rescued = checked_search_response(search_with_failover(provider_name, query, limit))
+    except Exception as exc:  # noqa: BLE001 — preserve the primary and rescue as independent attempts
+        rescued = {"success": False, "error": str(exc), "failure": acquisition_error(exc).to_failure()}
+    data = rescued.get("data")
+    serving = data.get("served_by") if isinstance(data, dict) else None
+    if attempts is not None:
+        attempts.extend(search_attempts(rescued, serving, "keyless-rescue"))
     if rescued.get("success"):
         rescued.setdefault("data", {}).update(
             rescued_from=provider_name,
@@ -110,6 +125,7 @@ def _rescue_search(provider_name: str, original_error: str, query: str, limit: i
     # Ring also failed: the ORIGINAL error names the user's setup, so lead with it.
     return {
         "success": False,
+        "failure": rescued["failure"] if "failure" in rescued else WebUnclassifiedFailure().to_failure(),
         "error": (
             f"{original_error or 'search failed'} "
             f"(keyless rescue also failed: {rescued.get('error', 'unknown')})"

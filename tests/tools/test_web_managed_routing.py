@@ -109,7 +109,7 @@ def test_only_managed_search_may_use_billed_fallback(
         assert result["success"] == bool(expected_paths and expected_paths[-1] == "/v2/search")
         if result["success"]:
             assert result["data"]["fallback_from"] == "managed_primary"
-            assert "local test outage" in result["data"]["backend_error"]
+            assert result["data"]["backend_failure"] == {"kind": "unavailable", "retry": "transient", "scope": "provider", "status": 503}
             assert web_tools._get_extract_backend() == selection.get("extract_backend", "firecrawl")
     for path, headers, body in local_gateway:
         if path != "/v2/search":

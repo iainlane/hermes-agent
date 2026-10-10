@@ -594,7 +594,11 @@ class TestKeylessFailover:
         monkeypatch.setitem(keyless_mcp._KEYLESS_EXTRACTORS, "exa", lambda urls: throttled)
         monkeypatch.setitem(keyless_mcp._KEYLESS_EXTRACTORS, "parallel", lambda urls: good)
         out = keyless_mcp.extract_with_failover("exa", ["https://a", "https://b"])
-        assert out == good
+        cause = {"kind": "unclassified", "retry": "unknown", "scope": "provider"}
+        assert out == [{**row, "coverage": "unknown", "served_provider": "parallel", "attempts": [
+            {"status": "failed", "provider": "exa", "route": "keyless", "failure": cause},
+            {"status": "succeeded", "provider": "parallel", "route": "keyless"},
+        ]} for row in good]
 
     def test_extract_partial_failure_stays_on_primary(self, monkeypatch):
         self._pin(monkeypatch, "exa")
@@ -609,5 +613,13 @@ class TestKeylessFailover:
             lambda urls: called.append(1) or [],
         )
         out = keyless_mcp.extract_with_failover("exa", ["https://a", "https://b"])
-        assert out == partial
+        cause = {"kind": "unclassified", "retry": "unknown", "scope": "provider"}
+        assert out == [
+            {**partial[0], "coverage": "unknown", "served_provider": "exa", "attempts": [
+                {"status": "succeeded", "provider": "exa", "route": "keyless"},
+            ]},
+            {**partial[1], "failure": cause, "attempts": [
+                {"status": "failed", "provider": "exa", "route": "keyless", "failure": cause},
+            ]},
+        ]
         assert not called
