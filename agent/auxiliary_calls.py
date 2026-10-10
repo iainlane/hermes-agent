@@ -460,7 +460,7 @@ def _call_llm_impl(
             return client.chat.completions.create(**kwargs)
         return _relay_sync_stream(client, kwargs, provider=request_provider, api_mode=req.resolved_api_mode)
 
-    def _primary(**validate_kw: Any) -> Any:
+    def _primary() -> Any:
         # Retry on the same provider for a transient transport blip (connection reset / streaming-close /
         # incomplete chunked read / 5xx / 408) before the except-chain below escalates to provider/model
         # fallback. A dropped connection shouldn't abandon an otherwise-healthy provider — this especially
@@ -481,14 +481,14 @@ def _call_llm_impl(
                         request_provider, req.base_info or req.resolved_base_url),
                 ),
             ),
-            task, **validate_kw,
+            task, model=kwargs.get("model"), provider=request_provider, base_url=req.base_info,
         )
     try:
         # Bounded same-provider retry (exponential backoff, auxiliary.transient_retries) for
         # transient blips before escalating to fallback — a dropped connection shouldn't
         # abandon a healthy provider (matters for pinned MoA advisors).
         try:
-            return _primary(provider=request_provider, base_url=req.base_info)
+            return _primary()
         except Exception as transient_err:
             if not _should_retry_same_provider(task, transient_err, ""):
                 raise
@@ -511,7 +511,8 @@ def _call_llm_impl(
         def _perform(step: _LadderStep) -> Any:
             kind, args, kw = _ladder_step_call(step, req, retry_kwargs, candidate_kwargs)
             if kind == "call":
-                return _validate_llm_response(_relay_sync_completion(*args, **kw), task)
+                return _validate_llm_response(_relay_sync_completion(*args, **kw), task,
+                                              provider=kw.get("provider"), base_url=req.base_info, model=args[1].get("model"))
             if kind == "retry":
                 return _retry_same_provider_sync(**kw)
             return _call_fallback_candidate_sync(*args, **kw)
@@ -594,14 +595,14 @@ async def _async_call_llm_impl(
         async def _acreate(_kwargs: dict[str, Any]) -> Any:
             return await _acreate_with_progress(client, _kwargs, task, force_stream=_force_stream_async)
 
-        async def _primary(**validate_kw: Any) -> Any:
+        async def _primary() -> Any:
             return _validate_llm_response(
                 await _relay_async_completion(
                     client, kwargs, provider=request_provider, api_mode=req.resolved_api_mode,
                     create=_acreate),
-                task, **validate_kw)
+                task, model=kwargs.get("model"), provider=request_provider, base_url=req.base_info)
         try:
-            return await _primary(provider=request_provider, base_url=req.base_info)
+            return await _primary()
         except Exception as transient_err:
             # The async Codex adapter wraps the sync stream via to_thread: same TimeoutError here.
             if not _should_retry_same_provider(task, transient_err, " (async)"):
@@ -613,7 +614,8 @@ async def _async_call_llm_impl(
         async def _perform(step: _LadderStep) -> Any:
             kind, args, kw = _ladder_step_call(step, req, retry_kwargs, candidate_kwargs)
             if kind == "call":
-                return _validate_llm_response(await _relay_async_completion(*args, **kw), task)
+                return _validate_llm_response(await _relay_async_completion(*args, **kw), task,
+                                              provider=kw.get("provider"), base_url=req.base_info, model=args[1].get("model"))
             if kind == "retry":
                 return await _retry_same_provider_async(**kw)
             fb_client, fb_model, fb_label = args
