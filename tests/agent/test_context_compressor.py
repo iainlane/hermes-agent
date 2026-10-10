@@ -3,6 +3,7 @@
 import json
 import re
 import sqlite3
+from contextlib import closing
 import pytest
 import time
 import httpx
@@ -286,7 +287,7 @@ class TestSummarizeToolResultClarify:
 
         assert summary == "[clarify] asked user a question"
         assert summary.encode("utf-8")
-        with sqlite3.connect(":memory:") as connection:
+        with closing(sqlite3.connect(":memory:")) as connection:
             connection.execute("CREATE TABLE messages (content TEXT)")
             connection.execute("INSERT INTO messages VALUES (?)", (summary,))
             assert connection.execute("SELECT content FROM messages").fetchone()[0] == summary
@@ -321,7 +322,7 @@ class TestSummarizeToolResultClarify:
         assert summary.encode("utf-8")
         assert "Привет 😀" in summary
         assert "\\ud83d" in summary
-        with sqlite3.connect(":memory:") as connection:
+        with closing(sqlite3.connect(":memory:")) as connection:
             connection.execute("CREATE TABLE messages (content TEXT)")
             connection.execute("INSERT INTO messages VALUES (?)", (summary,))
             assert connection.execute("SELECT content FROM messages").fetchone()[0] == summary
