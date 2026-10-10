@@ -19,6 +19,7 @@ import os
 from typing import Any, Dict, List
 
 from agent.provider_base import ProviderBase
+from agent.web_acquisition import WebExtractCapabilities
 
 
 def get_provider_env(name: str) -> str:
@@ -86,7 +87,11 @@ class WebSearchProvider(ProviderBase):
         the dispatcher awaits coroutine functions)."""
         return False
 
-    def search(self, query: str, limit: int = 5) -> Dict[str, Any]:
+    def extract_capabilities(self) -> WebExtractCapabilities:
+        """Declare supported options; legacy plugins retain their default extraction."""
+        return WebExtractCapabilities()
+
+    def search(self, query: str, limit: int = 5) -> dict[str, Any]:
         """Execute a web search. Callers gate on :meth:`supports_search`."""
         raise NotImplementedError(
             f"{self.name} does not support search (override supports_search)"
