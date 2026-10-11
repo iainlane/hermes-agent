@@ -314,7 +314,7 @@ async def test_firecrawl_extract_timeout_reports_only_its_own_deadline(
     monkeypatch.setattr(
         firecrawl,
         "_get_firecrawl_client",
-        lambda: SimpleNamespace(scrape=scrape),
+        lambda capability: SimpleNamespace(scrape=scrape),
     )
     result = await firecrawl._scrape_one(
         "https://example.test/page", ["markdown"], "markdown"

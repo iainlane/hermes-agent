@@ -156,11 +156,11 @@ def test_unentitled_managed_search_gets_fast_search_but_no_billed_fallback(monke
 @pytest.mark.parametrize(
     ("selection", "expected"),
     [
-        ({"backend": "nous", "extract_backend": "firecrawl"}, {"search": True, "extract": True}),
-        ({"backend": "firecrawl", "extract_backend": "nous"}, {"search": False, "extract": False}),
+        ({"backend": "nous", "extract_backend": "firecrawl"}, {"search": True, "extract": False}),
+        ({"backend": "firecrawl", "extract_backend": "nous"}, {"search": False, "extract": True}),
     ],
 )
-def test_firecrawl_rescue_matches_private_shared_route(monkeypatch, tmp_path, selection, expected):
+def test_firecrawl_rescue_matches_each_capability_route(monkeypatch, tmp_path, selection, expected):
     from hermes_cli.config import atomic_config_write
     from plugins.web.firecrawl.provider import FirecrawlWebSearchProvider
     from tools import web_tools_rescue
