@@ -39,6 +39,7 @@ from gateway.turn_lease import TurnLeaseTimeoutError
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 if TYPE_CHECKING:  # Never import the runner at runtime (cycle).
+    from gateway.platforms.base import BasePlatformAdapter
     from gateway.run import GatewayRunner
     from gateway.run_turn_runner import TurnRunner
     from gateway.session_state import SessionState
@@ -55,7 +56,7 @@ class GatewayInboundMixin(GatewayInboundContextMixin, GatewayInboundAdmissionMix
     """Inbound message pipeline (_handle_message, text/media preparation, durable-turn markers, plugin injection) for GatewayRunner."""
 
     if TYPE_CHECKING:
-        _delivery_adapter_for = GatewayRunner._delivery_adapter_for
+        _delivery_adapter_for: Callable[[Optional[SessionSource]], Optional[BasePlatformAdapter]]
         _session_key_for_source = GatewayRunner._session_key_for_source
         _restore_pending_dispatch = GatewayRunner._restore_pending_dispatch
 
