@@ -6,6 +6,7 @@ import asyncio
 import copy
 import json
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from textwrap import dedent
 from typing import Callable, Any
@@ -174,7 +175,7 @@ def test_pending_correction_keeps_typed_identity_authority_and_user_receipt_acro
     )
 
     def receipts() -> list[tuple[str, str]]:
-        with sqlite3.connect(home / "state.db") as db:
+        with closing(sqlite3.connect(home / "state.db")) as db:
             rows = db.execute(
                 "SELECT content, display_metadata FROM messages WHERE role='user'"
             ).fetchall()
