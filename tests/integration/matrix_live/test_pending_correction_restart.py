@@ -174,18 +174,33 @@ def test_pending_correction_keeps_typed_identity_authority_and_user_receipt_acro
         + "\n"
     )
 
-    def receipts() -> list[tuple[str, str]]:
-        with closing(sqlite3.connect(home / "state.db")) as db:
-            rows = db.execute(
-                "SELECT content, display_metadata FROM messages WHERE role='user'"
-            ).fetchall()
+    def receipts(*, gateway_running: bool = True) -> list[tuple[str, str]]:
+        if gateway_running:
+            result = gateway.container.exec([
+                "/opt/hermes/.venv/bin/python",
+                "-c",
+                dedent("""\
+                    import json, sqlite3
+                    from contextlib import closing
+                    with closing(sqlite3.connect("/opt/data/state.db")) as db:
+                        rows = db.execute("SELECT content, display_metadata FROM messages WHERE role='user'").fetchall()
+                    print(json.dumps(rows))
+                """),
+            ])
+            assert result.exit_code == 0, result.output.decode(errors="replace")
+            rows = json.loads(result.output)
+        else:
+            with closing(sqlite3.connect(home / "state.db")) as db:
+                rows = db.execute(
+                    "SELECT content, display_metadata FROM messages WHERE role='user'"
+                ).fetchall()
         return [
             (content, json.loads(metadata)["gateway_input_owner"])
             for content, metadata in rows
             if metadata and json.loads(metadata).get("gateway_input_owner") == owner
         ]
 
-    assert receipts() == []
+    assert receipts(gateway_running=False) == []
     (home / "context-release").write_text("release", encoding="utf-8")
     gateway.restart()
     _wait_for(

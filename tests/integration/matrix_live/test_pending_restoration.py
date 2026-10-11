@@ -1,8 +1,7 @@
 """Native pending originals resume only after current homeserver validation."""
 from __future__ import annotations
 import json
-import sqlite3
-from contextlib import closing
+from textwrap import dedent
 from pathlib import Path
 import pytest
 from tests.integration.matrix_live.conftest import _wait_for
@@ -62,10 +61,24 @@ def test_native_buffered_emote_and_stickers_resume_with_durable_user_receipts(tm
     gateway.restart()
 
     def receipts():
-        with closing(sqlite3.connect(home / "state.db")) as db:
-            rows = db.execute("SELECT role, content, display_metadata FROM messages WHERE role = 'user'").fetchall()
-        return [(content, json.loads(metadata).get("gateway_input_owner"))
-                for role, content, metadata in rows if metadata and json.loads(metadata).get("gateway_input_owner") in owners]
+        result = gateway.container.exec([
+            "/opt/hermes/.venv/bin/python",
+            "-c",
+            dedent("""\
+                import json, sqlite3
+                from contextlib import closing
+                with closing(sqlite3.connect("/opt/data/state.db")) as db:
+                    rows = db.execute("SELECT role, content, display_metadata FROM messages WHERE role = 'user'").fetchall()
+                print(json.dumps(rows))
+            """),
+        ])
+        assert result.exit_code == 0, result.output.decode(errors="replace")
+        rows = json.loads(result.output)
+        return [
+            (content, json.loads(metadata).get("gateway_input_owner"))
+            for role, content, metadata in rows
+            if metadata and json.loads(metadata).get("gateway_input_owner") in owners
+        ]
 
     _wait_for(lambda: len(receipts()) == len(owners), "canonical user receipts for restored originals", timeout=30)
     _wait_for(lambda: len(gateway.model.main_requests()) >= before + len(owners), "actual restored model turns", timeout=30)
