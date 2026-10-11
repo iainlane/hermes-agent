@@ -11,12 +11,14 @@ from tests.gateway.test_matrix_rich_content import _adapter, _body, _event, _run
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["emote", "sticker"])
-async def test_pending_native_contributions_preserve_identity_and_live_revalidation(tmp_path, monkeypatch, kind):
+async def test_pending_native_contributions_preserve_identity_and_live_revalidation(
+    tmp_path, monkeypatch, kind, request: pytest.FixtureRequest
+):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     adapter, received = _adapter(monkeypatch)
     await adapter._on_room_message(_typed(_event(kind)))
     event = received.await_args.args[0]
-    runner = _runner(adapter, tmp_path)
+    runner = _runner(adapter, tmp_path, request)
     try:
         dependency, = (
             snapshot for snapshot in event._inbound_context_dependencies
