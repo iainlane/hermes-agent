@@ -14,6 +14,7 @@ import threading
 import pytest
 
 import cron.scheduler_delivery as sd
+import cron.scheduler_delivery_continuation as continuation
 from gateway.config import GatewayConfig, Platform
 from gateway.platforms.base import SendResult
 
@@ -71,7 +72,7 @@ def test_no_user_id_off_the_relay_or_for_fan_out_targets(native, deliver_to):
 
 def test_cold_adapter_send_reaches_the_transport_with_user_id(monkeypatch):
     """End to end through the live lane: what the connector sees on the wire for a cold-cache relay DM."""
-    monkeypatch.setattr(sd, "_maybe_mirror_cron_delivery", lambda *a, **k: None)
+    monkeypatch.setattr(continuation, "_maybe_mirror_cron_delivery", lambda *a, **k: None)
     loop = asyncio.new_event_loop()
     th = threading.Thread(target=loop.run_forever, daemon=True)
     th.start()
