@@ -1276,16 +1276,25 @@ def test_split_fallback_final_keeps_every_successful_event_id():
 
 def test_split_matrix_send_reports_every_delivered_event():
     import asyncio
+    from collections.abc import Callable
     from unittest.mock import AsyncMock
 
     from plugins.platforms.matrix.adapter import MatrixAdapter
     from plugins.platforms.matrix.delivery import MatrixSendTarget
 
     async def exercise():
-        adapter = object.__new__(MatrixAdapter)
+        class SplitAdapter(MatrixAdapter):
+            @staticmethod
+            def truncate_message(
+                content: str,
+                max_length: int = 4096,
+                len_fn: Callable[[str], int] | None = None,
+            ) -> list[str]:
+                return ["abcd", "ef"]
+
+        adapter = object.__new__(SplitAdapter)
         adapter.max_message_length = 4
         adapter.format_message = lambda text: text
-        adapter.truncate_message = lambda text, limit: ("abcd", "ef")
         adapter._build_text_message_content = lambda text: {"body": text}
         adapter._apply_relation_metadata = lambda *_args, **_kwargs: None
         adapter._resolve_send_destination = AsyncMock(
