@@ -133,11 +133,15 @@ def test_turn_settles_before_post_turn_trim(turn_stubs, monkeypatch, caplog, set
     agent = types.SimpleNamespace(
         session_id="agent-sid-1", run_conversation=lambda *a, **k: {"final_response": "done"},
         clear_interrupt=lambda: None)
-    session = _session(agent=agent, running=True)
+    session = _session(agent=agent)
     monkeypatch.setattr(server, "_sessions", {"ui-sid": session})
+    with session["history_lock"]:
+        turn_claim = server._claim_session_turn(session)
     try:
         with caplog.at_level(logging.INFO, logger="tui_gateway.server"):
-            assert server._run_prompt_submit("rid", "ui-sid", session, "hi")
+            assert server._run_prompt_submit(
+                "rid", "ui-sid", session, "hi", turn_claim=turn_claim
+            )
             assert entered.wait(timeout=5)
             assert session["running"] is False
             assert len(_records(caplog, "tui turn finished")) == 1

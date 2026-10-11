@@ -11,6 +11,7 @@ import os
 
 from hermes_state import SessionDB
 from tui_gateway import server
+from tui_gateway.session_lifecycle import _release_session_turn
 
 
 def _gateway_with_db(monkeypatch, tmp_path):
@@ -45,7 +46,17 @@ def test_desktop_explicit_cwd_persists_when_local_probe_cannot_see_it(monkeypatc
         assert session["cwd"] == str(workspace)
         assert session["explicit_cwd"] is True
 
-        assert server._persist_session_row_for_submit("rid", session) is None
+        with session["history_lock"]:
+            turn_claim = server._claim_session_turn(session)
+        try:
+            assert (
+                server._persist_session_row_for_submit(
+                    "rid", session, turn_claim=turn_claim
+                )
+                is None
+            )
+        finally:
+            _release_session_turn(session, turn_claim)
         assert db.get_session(stored_id)["cwd"] == str(workspace)
     finally:
         if sid:
@@ -76,7 +87,17 @@ def test_desktop_inherited_cwd_persists_only_when_the_resolution_adopted_it(
         assert session["cwd"] == container_cwd
         assert session["explicit_cwd"] is True
 
-        assert server._persist_session_row_for_submit("rid", session) is None
+        with session["history_lock"]:
+            turn_claim = server._claim_session_turn(session)
+        try:
+            assert (
+                server._persist_session_row_for_submit(
+                    "rid", session, turn_claim=turn_claim
+                )
+                is None
+            )
+        finally:
+            _release_session_turn(session, turn_claim)
         assert db.get_session(stored_id)["cwd"] == container_cwd
     finally:
         if sid:
@@ -103,7 +124,17 @@ def test_desktop_launch_fallback_cwd_still_persists_nothing(monkeypatch, tmp_pat
         session = server._sessions[sid]
         assert session["explicit_cwd"] is False
 
-        assert server._persist_session_row_for_submit("rid", session) is None
+        with session["history_lock"]:
+            turn_claim = server._claim_session_turn(session)
+        try:
+            assert (
+                server._persist_session_row_for_submit(
+                    "rid", session, turn_claim=turn_claim
+                )
+                is None
+            )
+        finally:
+            _release_session_turn(session, turn_claim)
         assert db.get_session(stored_id)["cwd"] is None
     finally:
         if sid:
