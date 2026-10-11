@@ -286,7 +286,7 @@ for name in (
     "encrypt_owner",
     "read_owner",
 ):
-    _FAILURE_ERRORS[name] = "Matrix client ownership changed"
+    _FAILURE_ERRORS[name] = "Matrix client changed" if name == "read_owner" else "Matrix client ownership changed"
 
 
 @pytest.mark.asyncio
@@ -588,7 +588,7 @@ async def test_registry_thread_refusals_and_partial_delivery(
             await native_client.api.session.close()
     expected: dict[str, Any] = {"success": False, "error": _FAILURE_ERRORS[failure]}
     if failure == "read_owner":
-        expected = {"error": "Matrix client changed"}
+        expected = {"error": _FAILURE_ERRORS[failure]}
     if sent:
         expected.update(room_id=ROOM, root_event_id="$root", partial=True)
     visible = failure in {"interrupt_after_reply", "chunk_permission"}
@@ -634,7 +634,7 @@ async def test_sdk_admission_never_sends_plaintext_after_learning_encryption(
     wire = AsyncMock(return_value={"event_id": "$confirmed"})
     monkeypatch.setattr(client.api, "request", wire)
 
-    async def identify(room):
+    async def identify(room, *, owner=None, require_classification=False):
         await store.set_encryption_info(room, RoomEncryptionStateEventContent())
         return False
 
@@ -695,7 +695,7 @@ async def test_sdk_send_failure_reports_uncertainty_only_after_the_request(
             return None
         return failure == "group_session" and failing()
 
-    async def identify(room):
+    async def identify(room, *, owner=None, require_classification=False):
         if failure == "admission_timeout" and failing() and failed_send in preparing:
             raise TimeoutError("room identity lookup timed out")
         return False
@@ -965,3 +965,99 @@ async def test_thread_send_rechecks_policy_after_final_preparation(phase, policy
          else "Matrix requester is not authorized for this room"}, 0,
     )
 
+
+
+@pytest.fixture(autouse=True)
+def _close_registry_worker_loops(monkeypatch):
+    import model_tools
+
+    worker_loops = set()
+    get_worker_loop = model_tools._get_worker_loop
+
+    def tracked_worker_loop():
+        loop = get_worker_loop()
+        worker_loops.add(loop)
+        return loop
+
+    monkeypatch.setattr(model_tools, "_get_worker_loop", tracked_worker_loop)
+    yield
+
+    for loop in worker_loops:
+        loop.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("root_text", ["界" * 41, "😀" * 31], ids=["cjk", "emoji"])
+async def test_thread_root_uses_the_adapter_byte_limit(monkeypatch, root_text):
+    from mautrix.client import Client
+    from mautrix.client.state_store.memory import MemoryStateStore
+
+    adapter = _adapter()
+    adapter.max_message_length = 120
+    store = MemoryStateStore()
+    monkeypatch.setattr(store, "is_encrypted", AsyncMock(return_value=False))
+    client = Client(mxid="@bot:server", base_url="https://server", state_store=store)
+    request = AsyncMock(return_value={"event_id": "$unexpected"})
+    monkeypatch.setattr(client.api, "request", request)
+    adapter._client = client
+    try:
+        result = await _dispatch(
+            adapter, {"root_text": root_text, "message": "First reply"}
+        )
+        assert result == {
+            "success": False,
+            "error": "root_text exceeds the Matrix message length limit",
+        }
+        request.assert_not_awaited()
+    finally:
+        await client.api.session.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("message", ["界" * 100, "😀" * 100], ids=["cjk", "emoji"])
+async def test_thread_replies_fit_the_adapter_byte_limit(monkeypatch, message):
+    from mautrix.client import Client
+    from mautrix.client.state_store.memory import MemoryStateStore
+
+    adapter = _adapter()
+    adapter.max_message_length = 120
+    store = MemoryStateStore()
+    monkeypatch.setattr(store, "is_encrypted", AsyncMock(return_value=False))
+    client = Client(mxid="@bot:server", base_url="https://server", state_store=store)
+    sent = []
+
+    async def request(method, path, content, **kwargs):
+        event_id = f"$event-{len(sent)}"
+        sent.append((event_id, content))
+        return {"event_id": event_id}
+
+    monkeypatch.setattr(client.api, "request", AsyncMock(side_effect=request))
+    adapter._client = client
+    try:
+        result = await _dispatch(adapter, {"root_text": "Root", "message": message})
+        assert result == {
+            "success": True,
+            "room_id": ROOM,
+            "root_event_id": "$event-0",
+            "initial_reply_event_id": "$event-1",
+        }
+        assert sent[0] == ("$event-0", {"msgtype": "m.text", "body": "Root"})
+        replies = sent[1:]
+        assert all(
+            len(content["body"].encode("utf-8")) <= adapter.max_message_length
+            for _, content in replies
+        )
+        assert (
+            "".join(content["body"].split(" (")[0] for _, content in replies) == message
+        )
+        assert [content["m.relates_to"] for _, content in replies] == [
+            {
+                "rel_type": "m.thread",
+                "event_id": "$event-0",
+                "is_falling_back": True,
+                "m.in_reply_to": {"event_id": previous},
+            }
+            for previous in ["$event-0", *(event_id for event_id, _ in replies[:-1])]
+        ]
+    finally:
+        await client.api.session.close()

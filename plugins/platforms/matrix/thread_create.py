@@ -138,7 +138,7 @@ class MatrixThreadCreateMixin:
                 if root_text is None:
                     raise MatrixSessionError("root_text is required for a new root")
                 formatted = self.format_message(root_text)
-                if len(formatted) > self.max_message_length:
+                if self.message_len_fn(formatted) > self.max_message_length:
                     raise MatrixSessionError(
                         "root_text exceeds the Matrix message length limit"
                     )
@@ -155,7 +155,9 @@ class MatrixThreadCreateMixin:
 
             phase = "reply"
             for chunk in self.truncate_message(
-                self.format_message(message), self.max_message_length
+                self.format_message(message),
+                self.max_message_length,
+                len_fn=self.message_len_fn,
             ):
                 await access.admit()
                 self._check_thread_interrupt(interrupted)

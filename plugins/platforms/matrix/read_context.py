@@ -95,11 +95,15 @@ class MatrixSessionAccess:
 
     async def admit(self) -> str:
         self.check()
-        allowed = await self.adapter._is_allowed_matrix_room_event(self.room_id)
+        allowed = await self.adapter._is_allowed_matrix_room_event(
+            self.room_id, owner=RoomClientOwner(self.adapter, self.client), require_classification=True,
+        )
         self.check()
         if not allowed:
             raise MatrixSessionError("Matrix room is not allowed or joined")
-        is_dm = await self.adapter._is_dm_room(self.room_id)
+        is_dm = await self.adapter._is_dm_room(
+            self.room_id, owner=RoomClientOwner(self.adapter, self.client), require_classification=True,
+        )
         self.check()
         chat_type = "dm" if is_dm else "group"
         _, _, error = _current_read_access(
