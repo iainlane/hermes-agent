@@ -20,7 +20,7 @@ import types
 
 import pytest
 
-from gateway.config import Platform
+from gateway.config import GatewayConfig, Platform
 from gateway.platforms.base import AudioFormat, StreamingTTSHandle
 from gateway.run_inbound import GatewayInboundMixin
 from gateway.run_voice import GatewayVoiceMixin
@@ -422,7 +422,7 @@ class _Runner(GatewayInboundMixin, GatewayVoiceMixin):
     """The production mixins, subclassed only to pin config and the authorization verdict."""
 
     def __init__(self, echo: bool = True, authorized: bool = True):
-        self.config = types.SimpleNamespace(stt_echo_transcripts=echo)
+        self.config = GatewayConfig(stt_echo_transcripts=echo)
         self.authorized = authorized
 
     def _is_user_authorized(self, source, **_kw) -> bool:
