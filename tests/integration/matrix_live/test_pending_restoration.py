@@ -23,7 +23,7 @@ def test_native_buffered_emote_and_stickers_resume_with_durable_user_receipts(tm
     received = json.loads(linux_nio_observer.run_python(prefix + "print(json.dumps(asyncio.run(accepted_exchange(ROOM,BOT,DEVICE,encrypted=ENCRYPTED))))\n").strip().splitlines()[-1])
     prefix += f"ROOT={received['root']!r}\nURL={received['url']!r}\n"
     linux_nio_observer.run_python(prefix + "print(asyncio.run(paused_emote(ROOM,ROOT,encrypted=ENCRYPTED)))\n")
-    _wait_for(lambda: (home / "context-started").exists(), "active emote barrier", timeout=10)
+    _wait_for(lambda: (home / "queued-context-started").exists(), "active emote barrier", timeout=10)
     body = f"{live_room.bot.user_id} Checkpoint buffered emote"
     code = ("async def emit():\n    client=open_encrypted_client()\n    try:\n        await client.sync(timeout=0,full_state=True)\n"
             f"        content={{'msgtype':'m.emote','body':{body!r},'m.relates_to':relation(ROOT,ROOT)}}\n"
@@ -57,7 +57,7 @@ def test_native_buffered_emote_and_stickers_resume_with_durable_user_receipts(tm
     assert all(p.stat().st_mode & 0o777 == 0o600 for p in (home / "pending_messages").glob("*.json"))
     before = len(gateway.model.main_requests())
     owners = {record["input_owner"]["owner"] for record in records}
-    hand_off(home / "context-release", "release")
+    hand_off(home / "queued-context-release", "release")
     gateway.restart()
 
     def receipts():
