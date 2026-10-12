@@ -7,11 +7,16 @@ import threading
 import time
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
+from agent.auxiliary_request_requirements import (
+    AuxiliaryRequestRequirements, AuxiliaryRequestRequirementError,
+    request_requirements_scope, preserve_stream_requirements,
+)
+
 if TYPE_CHECKING:
     from agent.auxiliary_client import _ResolvedAuxRoute, _PreparedAuxRequest, _LadderStep
 
 
-def _drive_ladder(ladder, perform: Callable[[_LadderStep], Any]) -> Any:
+def _drive_ladder(ladder, perform: Callable[[_LadderStep], Any], *, prior_error: Exception | None = None) -> Any:
     """Run a ladder generator, feeding each step's result (or exception) back in."""
     try:
         step = next(ladder)
@@ -19,13 +24,18 @@ def _drive_ladder(ladder, perform: Callable[[_LadderStep], Any]) -> Any:
             try:
                 result = perform(step)
             except Exception as exc:
+                if isinstance(exc, AuxiliaryRequestRequirementError):
+                    if exc.__cause__ is None and prior_error is not None:
+                        raise exc from prior_error
+                    raise
+                prior_error = exc
                 step = ladder.throw(exc)
             else:
                 step = ladder.send(result)
     except StopIteration as stop:
         return stop.value
 
-async def _drive_ladder_async(ladder, perform: Callable[[_LadderStep], Any]) -> Any:
+async def _drive_ladder_async(ladder, perform: Callable[[_LadderStep], Any], *, prior_error: Exception | None = None) -> Any:
     """Async twin of :func:`_drive_ladder` (``perform`` is awaited)."""
     try:
         step = next(ladder)
@@ -33,6 +43,11 @@ async def _drive_ladder_async(ladder, perform: Callable[[_LadderStep], Any]) -> 
             try:
                 result = await perform(step)
             except Exception as exc:
+                if isinstance(exc, AuxiliaryRequestRequirementError):
+                    if exc.__cause__ is None and prior_error is not None:
+                        raise exc from prior_error
+                    raise
+                prior_error = exc
                 step = ladder.throw(exc)
             else:
                 step = ladder.send(result)
@@ -215,6 +230,8 @@ def _aux_recovery_ladder(
     strips → Nous heal/refresh → credential refresh/pool rotation → provider fallback.
     Each rung returns a response, narrows ``first_err`` and falls through, or re-raises.
     Raises the narrowed ``first_err`` when exhausted (after evicting a connection-poisoned client)."""
+    if isinstance(first_err, AuxiliaryRequestRequirementError):
+        raise first_err
 
     from agent.auxiliary_client import (
         _LadderRoute,
@@ -286,6 +303,7 @@ def call_llm(
     stream_options: dict | None = None, route_info: Optional[dict[str, str]] = None,
     latency_info: Optional[dict[str, int]] = None,
     allow_provider_fallback: bool = True,
+    requirements: AuxiliaryRequestRequirements | None = None,
 ) -> Any:
     """Run an auxiliary LLM request, applying the configured task limit."""
 
@@ -309,6 +327,7 @@ def call_llm(
     prior_progress_hook = getattr(_aux_progress, "hook", None)
     try:
         with (
+            request_requirements_scope(requirements, tools, max_tokens),
             scoped_runtime_main(main_runtime),
             aux_progress_hook(
                 prior_progress_hook
@@ -326,6 +345,8 @@ def call_llm(
                 max_tokens=max_tokens, tools=tools, timeout=timeout, extra_body=extra_body,
                 reasoning_config=reasoning_config, extra_headers=extra_headers, api_mode=api_mode,
                 stream=stream, stream_options=stream_options, route_info=route_info, allow_provider_fallback=allow_provider_fallback)
+            if stream:
+                response = preserve_stream_requirements(response)
         if stream and semaphore is not None:
             stream_semaphore = semaphore
             semaphore = None
@@ -536,6 +557,8 @@ def _call_llm_impl(
                     _last_transient = retry_transient
             raise _last_transient
     except Exception as first_err:
+        if isinstance(first_err, AuxiliaryRequestRequirementError):
+            raise
         def _perform(step: _LadderStep) -> Any:
             kind, args, kw = _ladder_step_call(step, req, retry_kwargs, candidate_kwargs)
             if kind == "call":
@@ -547,7 +570,7 @@ def _call_llm_impl(
         return _drive_ladder(
             _start_recovery_ladder(first_err, req, retry_kwargs, task=task, async_mode=False, route_info=route_info,
                                    allow_provider_fallback=allow_provider_fallback),
-            _perform)
+            _perform, prior_error=first_err)
 
 
 async def async_call_llm(
@@ -557,6 +580,7 @@ async def async_call_llm(
     timeout: float | None = None, extra_body: dict | None = None, reasoning_config: Optional[dict] = None,
     route_info: Optional[dict[str, str]] = None,
     allow_provider_fallback: bool = True,
+    requirements: AuxiliaryRequestRequirements | None = None,
 ) -> Any:
     """Run an asynchronous auxiliary LLM request under the configured limit."""
 
@@ -569,7 +593,7 @@ async def async_call_llm(
     if semaphore is not None:
         await semaphore.acquire()
     try:
-        with scoped_runtime_main(main_runtime):
+        with scoped_runtime_main(main_runtime), request_requirements_scope(requirements, tools, max_tokens):
             return await _async_call_llm_impl(
                 task=task, provider=provider, model=model, base_url=base_url, api_key=api_key,
                 main_runtime=main_runtime, messages=messages, temperature=temperature,
@@ -638,6 +662,8 @@ async def _async_call_llm_impl(
                         "once on the same provider before fallback: %s", task or "call", transient_err)
             return await _primary()
     except Exception as first_err:
+        if isinstance(first_err, AuxiliaryRequestRequirementError):
+            raise
         async def _perform(step: _LadderStep) -> Any:
             kind, args, kw = _ladder_step_call(step, req, retry_kwargs, candidate_kwargs)
             if kind == "call":
@@ -651,4 +677,4 @@ async def _async_call_llm_impl(
         return await _drive_ladder_async(
             _start_recovery_ladder(first_err, req, retry_kwargs, task=task, async_mode=True, route_info=route_info,
                                    allow_provider_fallback=allow_provider_fallback),
-            _perform)
+            _perform, prior_error=first_err)

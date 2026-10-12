@@ -12,6 +12,6 @@ class _AuxiliaryOpenAIProxy(_OpenAIProxy):
     __slots__ = ()
 
     def __call__(self, *args: Any, **kwargs: Any) -> "OpenAI":
-        from agent.native_usage_openai import UsageValidatedOpenAI
+        from agent.auxiliary_request_clients import openai_request_client_classes
 
-        return UsageValidatedOpenAI(*args, **kwargs)
+        return openai_request_client_classes()[0](*args, **kwargs)
