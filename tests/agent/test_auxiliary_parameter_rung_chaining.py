@@ -6,12 +6,12 @@ gateways phrase an unknown ``reasoning`` field as "Extra inputs are not permitte
 Each rejected field must be stripped in whatever order the provider raises them, and a fallback
 candidate must get the same recovery as the primary request.
 """
+from agent.auxiliary_calls import _drive_ladder
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from agent.auxiliary_client import (
     _call_fallback_candidate_sync,
-    _drive_ladder,
     _is_reasoning_field_rejection,
     _ladder_parameter_rungs,
     _LadderRoute,

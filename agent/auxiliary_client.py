@@ -7504,34 +7504,8 @@ def _ladder_provider_fallback(first_err: Exception, route: _LadderRoute):
     return None
 
 
-def _drive_ladder(ladder, perform: Callable[[_LadderStep], Any]) -> Any:
-    """Run a ladder generator, feeding each step's result (or exception) back in."""
-    try:
-        step = next(ladder)
-        while True:
-            try:
-                result = perform(step)
-            except Exception as exc:
-                step = ladder.throw(exc)
-            else:
-                step = ladder.send(result)
-    except StopIteration as stop:
-        return stop.value
 
 
-async def _drive_ladder_async(ladder, perform: Callable[[_LadderStep], Any]) -> Any:
-    """Async twin of :func:`_drive_ladder` (``perform`` is awaited)."""
-    try:
-        step = next(ladder)
-        while True:
-            try:
-                result = await perform(step)
-            except Exception as exc:
-                step = ladder.throw(exc)
-            else:
-                step = ladder.send(result)
-    except StopIteration as stop:
-        return stop.value
 
 
 @_relay_auxiliary_call

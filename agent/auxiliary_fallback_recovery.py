@@ -29,7 +29,7 @@ def send_with_parameter_rungs(
 ) -> Any:
     """``send(client, kwargs)``; on a parameter 400, retry through the parameter rungs. Any other
     error (auth, payment, connection) propagates unchanged for the caller's own handling."""
-    from agent.auxiliary_client import _drive_ladder
+    from agent.auxiliary_calls import _drive_ladder
     try:
         return send(client, kwargs)
     except Exception as first_err:
@@ -42,7 +42,7 @@ async def send_with_parameter_rungs_async(
     task: Optional[str],
 ) -> Any:
     """Async twin of :func:`send_with_parameter_rungs`."""
-    from agent.auxiliary_client import _drive_ladder_async
+    from agent.auxiliary_calls import _drive_ladder_async
     try:
         return await send(client, kwargs)
     except Exception as first_err:

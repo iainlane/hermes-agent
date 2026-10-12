@@ -29,6 +29,7 @@ local endpoint, with only the credential sources stubbed (the Nous portal accoun
 probe and the runtime-credential fetch are external boundaries).
 """
 
+from agent.auxiliary_calls import _drive_ladder
 import asyncio
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -144,12 +145,12 @@ def test_post_refresh_retry_owns_the_ladder_outcome(
         raise failure
 
     if retry_succeeds:
-        assert aux._drive_ladder(ladder, perform) == "refreshed-client-response"
+        assert _drive_ladder(ladder, perform) == "refreshed-client-response"
         assert hermetic == [], "a successful retry must not reach the fallback chain"
         return
 
     try:
-        result = aux._drive_ladder(ladder, perform)
+        result = _drive_ladder(ladder, perform)
     except _ApiError as exc:
         pytest.fail(
             f"the ladder let {exc!r} escape instead of falling through to the configured "
@@ -215,10 +216,10 @@ def test_explicit_provider_auth_uses_its_configured_task_fallback(monkeypatch, s
         return "fallback-response"
 
     if spare_survives:
-        assert aux._drive_ladder(ladder, perform) == "fallback-response"
+        assert _drive_ladder(ladder, perform) == "fallback-response"
     else:
         with pytest.raises(_ApiError, match="Unauthorized"):
-            aux._drive_ladder(ladder, perform)
+            _drive_ladder(ladder, perform)
     assert not chain
 
 
@@ -252,7 +253,7 @@ def test_explicit_provider_auth_never_uses_an_unconfigured_fallback(monkeypatch)
     )
 
     with pytest.raises(_ApiError, match="Unauthorized"):
-        aux._drive_ladder(ladder, lambda step: pytest.fail("no fallback request expected"))
+        _drive_ladder(ladder, lambda step: pytest.fail("no fallback request expected"))
 
 
 @pytest.fixture
@@ -397,7 +398,7 @@ def test_exhausted_ladder_raises_the_narrowed_error(monkeypatch, hermetic):
         raise failure
 
     with pytest.raises(_ApiError) as raised:
-        aux._drive_ladder(_ladder(), perform)
+        _drive_ladder(_ladder(), perform)
 
     assert raised.value is failure, (
         f"the ladder must surface the actionable retry failure, got {raised.value!r}")

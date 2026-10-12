@@ -11,6 +11,35 @@ if TYPE_CHECKING:
     from agent.auxiliary_client import _ResolvedAuxRoute, _PreparedAuxRequest, _LadderStep
 
 
+def _drive_ladder(ladder, perform: Callable[[_LadderStep], Any]) -> Any:
+    """Run a ladder generator, feeding each step's result (or exception) back in."""
+    try:
+        step = next(ladder)
+        while True:
+            try:
+                result = perform(step)
+            except Exception as exc:
+                step = ladder.throw(exc)
+            else:
+                step = ladder.send(result)
+    except StopIteration as stop:
+        return stop.value
+
+async def _drive_ladder_async(ladder, perform: Callable[[_LadderStep], Any]) -> Any:
+    """Async twin of :func:`_drive_ladder` (``perform`` is awaited)."""
+    try:
+        step = next(ladder)
+        while True:
+            try:
+                result = await perform(step)
+            except Exception as exc:
+                step = ladder.throw(exc)
+            else:
+                step = ladder.send(result)
+    except StopIteration as stop:
+        return stop.value
+
+
 def _resolve_call_client(
     task: Optional[str], *, provider: Optional[str], model: Optional[str], base_url: Optional[str],
     api_key: Optional[str], resolved_provider: str, resolved_model: Optional[str],
@@ -428,7 +457,6 @@ def _call_llm_impl(
         _TRANSIENT_RETRY_BACKOFF_BASE,
         _call_fallback_candidate_sync,
         _create_with_progress,
-        _drive_ladder,
         _is_transient_transport_error,
         _provider_requires_stream,
         _relay_sync_completion,
@@ -569,7 +597,6 @@ async def _async_call_llm_impl(
         _LadderStep,
         _acreate_with_progress,
         _call_fallback_candidate_async,
-        _drive_ladder_async,
         _provider_requires_stream,
         _relay_async_completion,
         _retry_same_provider_async,
