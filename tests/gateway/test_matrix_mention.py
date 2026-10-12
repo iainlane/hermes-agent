@@ -149,27 +149,6 @@ class TestOutboundMentions:
             "@alice:example.org</a>, please check this."
         )
 
-    def test_formatted_body_preserves_inline_code_inside_link_label(self):
-        text = (
-            "[`feat/minimal-rewrite`]"
-            "(https://github.com/example/project/tree/feat/minimal-rewrite)"
-        )
-
-        content = self.adapter._build_text_message_content(text)
-
-        assert content["body"] == text
-        assert content["formatted_body"] == (
-            '<a href="https://github.com/example/project/tree/feat/minimal-rewrite">'
-            "<code>feat/minimal-rewrite</code></a>"
-        )
-
-    def test_markdown_fallback_preserves_inline_code_inside_link_label(self):
-        text = "[`code`](https://example.com)"
-
-        html = self.adapter._markdown_to_html_fallback(text)
-
-        assert html == '<a href="https://example.com"><code>code</code></a>'
-
 
 # ---------------------------------------------------------------------------
 # Require-mention gating in _on_room_message
@@ -422,3 +401,142 @@ def test_yaml_bridge_respects_scope_and_existing_env(monkeypatch, existing, seco
         if token is not None:
             reset_secret_scope(token)
         set_multiplex_active(False)
+
+
+_OUTBOUND_RENDER_CASES = [
+    pytest.param(
+        "[Do not eat eggs stamped `3UA1012066`](https://example.org/recall)",
+        "[Do not eat eggs stamped `3UA1012066`](https://example.org/recall)",
+        '<a href="https://example.org/recall">Do not eat eggs stamped <code>3UA1012066</code></a>',
+        None,
+        None,
+        False,
+        id="egg-recall",
+    ),
+    pytest.param(
+        "[`feat/minimal-rewrite`](https://github.com/example/project/tree/feat/minimal-rewrite)",
+        "[`feat/minimal-rewrite`](https://github.com/example/project/tree/feat/minimal-rewrite)",
+        '<a href="https://github.com/example/project/tree/feat/minimal-rewrite"><code>feat/minimal-rewrite</code></a>',
+        None,
+        None,
+        False,
+        id="original-link-label",
+    ),
+    pytest.param(
+        "[`code`](https://example.com)",
+        "[`code`](https://example.com)",
+        '<a href="https://example.com"><code>code</code></a>',
+        None,
+        None,
+        False,
+        id="original-fallback-label",
+    ),
+    pytest.param(
+        "[`one`](https://example.org/one) and [two `three`](https://example.org/two) plus `four`",
+        "[`one`](https://example.org/one) and [two `three`](https://example.org/two) plus `four`",
+        '<a href="https://example.org/one"><code>one</code></a> and <a href="https://example.org/two">two <code>three</code></a> plus <code>four</code>',
+        None,
+        None,
+        False,
+        id="multiple-nested-spans",
+    ),
+    pytest.param("bare text", "bare text", None, None, None, False, id="plain"),
+    pytest.param(
+        "`standalone`",
+        "`standalone`",
+        "<code>standalone</code>",
+        None,
+        None,
+        False,
+        id="code",
+    ),
+    pytest.param(
+        "[ordinary](https://example.org)",
+        "[ordinary](https://example.org)",
+        '<a href="https://example.org">ordinary</a>',
+        None,
+        None,
+        False,
+        id="ordinary-link",
+    ),
+    pytest.param(
+        "@bob:example.org [`@alice:example.org`](https://example.org) `@carol:example.org` @bob:example.org @dave:example.org",
+        "[@bob:example.org](https://matrix.to/#/@bob:example.org) [`@alice:example.org`](https://example.org) `@carol:example.org` [@bob:example.org](https://matrix.to/#/@bob:example.org) [@dave:example.org](https://matrix.to/#/@dave:example.org)",
+        '<a href="https://matrix.to/#/@bob:example.org">@bob:example.org</a> <a href="https://example.org"><code>@alice:example.org</code></a> <code>@carol:example.org</code> <a href="https://matrix.to/#/@bob:example.org">@bob:example.org</a> <a href="https://matrix.to/#/@dave:example.org">@dave:example.org</a>',
+        None,
+        {"user_ids": ["@bob:example.org", "@dave:example.org"]},
+        False,
+        id="users-and-deduplication",
+    ),
+    pytest.param(
+        "`@alice:example.org @room` [@carol:example.org @room](https://example.org)",
+        "`@alice:example.org @room` [@carol:example.org @room](https://example.org)",
+        '<code>@alice:example.org @room</code> <a href="https://example.org">@carol:example.org @room</a>',
+        None,
+        None,
+        True,
+        id="protected-users-and-room",
+    ),
+    *[
+        pytest.param(
+            "@room `@room` [@room](https://example.org)",
+            "@room `@room` [@room](https://example.org)",
+            '@room <code>@room</code> <a href="https://example.org">@room</a>',
+            None,
+            {"room": True} if enabled else None,
+            enabled,
+            id="room-enabled" if enabled else "room-disabled",
+        )
+        for enabled in (False, True)
+    ],
+    pytest.param(
+        "```\n@alice:example.org @room\n```\n@bob:example.org",
+        "```\n@alice:example.org @room\n```\n[@bob:example.org](https://matrix.to/#/@bob:example.org)",
+        '<pre><code>@alice:example.org @room\n</code></pre>\n<a href="https://matrix.to/#/@bob:example.org">@bob:example.org</a>',
+        '<pre><code>@alice:example.org @room\n</code></pre><br>\n<a href="https://matrix.to/#/@bob:example.org">@bob:example.org</a>',
+        {"user_ids": ["@bob:example.org"]},
+        True,
+        id="fenced-mentions",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "text,linked,html,fallback_html,mentions,allow_room", _OUTBOUND_RENDER_CASES
+)
+def test_outbound_mention_injection_preserves_protected_regions(
+    text, linked, html, fallback_html, mentions, allow_room
+):
+    from plugins.platforms.matrix.adapter import MatrixAdapter
+
+    adapter = object.__new__(MatrixAdapter)
+    assert adapter._inject_outbound_mention_links(text) == linked
+
+
+@pytest.mark.parametrize("fallback", [False, True], ids=["markdown", "fallback"])
+@pytest.mark.parametrize(
+    "text,linked,html,fallback_html,mentions,allow_room", _OUTBOUND_RENDER_CASES
+)
+def test_outbound_payload_preserves_rendering_and_notification_scope(
+    text, linked, html, fallback_html, mentions, allow_room, fallback, monkeypatch
+):
+    import sys
+
+    from plugins.platforms.matrix.adapter import MatrixAdapter
+
+    if fallback:
+        monkeypatch.setitem(sys.modules, "markdown", None)
+    else:
+        import markdown
+
+        assert markdown.Markdown is not None
+
+    adapter = object.__new__(MatrixAdapter)
+    adapter._allow_room_mentions = allow_room
+    expected = {"msgtype": "m.text", "body": text}
+    if mentions is not None:
+        expected["m.mentions"] = mentions
+    formatted = fallback_html if fallback and fallback_html is not None else html
+    if formatted is not None:
+        expected.update(format="org.matrix.custom.html", formatted_body=formatted)
+    assert adapter._build_text_message_content(text) == expected
