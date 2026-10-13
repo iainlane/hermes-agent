@@ -2737,7 +2737,7 @@ async def test_thread_fetch_uses_mautrix_get_method():
             before_event_id="$current",
         )
 
-    assert entries == [MatrixEventContext("@alice:example.org", "root")]
+    assert entries == [MatrixEventContext("@alice:example.org", "root", is_thread_root=True)]
     assert [
         call.args[1:] + (call.kwargs["query_params"],)
         for call in client.api.request.await_args_list
@@ -2840,7 +2840,7 @@ async def test_thread_backfill_omits_child_redacted_during_relations_fetch():
     cache.redact(room_id, "$child")
     release.set()
 
-    assert await fetching == [root]
+    assert await fetching == [MatrixEventContext("@alice:example.org", "root", is_thread_root=True)]
 
 
 @pytest.mark.asyncio
@@ -3095,7 +3095,7 @@ async def test_catch_up_filters_by_original_relation_after_bundled_edits():
         before_event_id="$current",
     )
 
-    assert (room_entries, thread_entries) == ([], [root])
+    assert (room_entries, thread_entries) == ([], [MatrixEventContext("@alice:example.org", "Root", is_thread_root=True)])
 
 
 @pytest.mark.asyncio
@@ -3271,7 +3271,7 @@ async def test_thread_fallback_limit_one_reads_one_earlier_event():
         before_event_id="$current",
     )
 
-    assert entries == [root, MatrixEventContext("@alice:example.org", "Earlier")]
+    assert entries == [MatrixEventContext("@alice:example.org", "Root", is_thread_root=True), MatrixEventContext("@alice:example.org", "Earlier")]
 
 
 # ---------------------------------------------------------------------------

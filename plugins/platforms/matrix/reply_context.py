@@ -23,6 +23,7 @@ class MatrixEventContext:
     media_type: str | None = None
     is_image: bool = False
     redacted: bool = False
+    is_thread_root: bool = False
 
 
 @dataclass(frozen=True)

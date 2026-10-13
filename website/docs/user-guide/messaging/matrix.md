@@ -117,8 +117,10 @@ earlier session. In the main timeline, catch-up after `/new` starts after the bo
 reply to `/new`, so the conversation that the reset discarded stays out of the new
 session. Thread messages stay within their thread; room catch-up excludes thread
 replies. The first message of a new thread session includes the thread root and up to
-`thread_backfill_limit` earlier thread messages instead. That history does not stop at
-the bot's own messages, because the new session has no transcript that contains them.
+`thread_backfill_limit` earlier thread messages instead. The root is included in full,
+even when the earlier messages cannot be fetched; earlier messages longer than 1,200
+characters are shortened. That history does not stop at the bot's own messages, because
+the new session has no transcript that contains them.
 In a thread, the first message after `/new` starts a new thread session, so it gets
 that history, including the messages from before `/new`. Free-response rooms and rooms
 with `require_mention: false` start a turn for every message, so they have no catch-up.

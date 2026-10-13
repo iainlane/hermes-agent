@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 from collections.abc import Callable
 from enum import Enum
@@ -176,7 +177,11 @@ async def fetch_thread_entries(
             event_key = "events_before"
     except Exception as exc:
         logger.debug("Matrix: could not fetch thread %s in %s: %s", thread_id, room_id, exc)
-        return []
+        # Catch-up includes the root only when the scan found no previous turn, which a failed
+        # page cannot show. A new thread session still needs the root, which is one event.
+        if is_previous_turn is not None:
+            return []
+        response = None
 
     chunk = response.get(event_key) if isinstance(response, dict) else None
     newest_first: list[MatrixEventContext] = []
@@ -213,6 +218,6 @@ async def fetch_thread_entries(
     if not reached_previous_turn and thread_id not in exclude_event_ids:
         root = await _thread_root(client, cache, room_id, thread_id, is_previous_turn)
         if root is not None:
-            entries.append(root)
+            entries.append(dataclasses.replace(root, is_thread_root=True))
     entries.extend(reversed(newest_first))
     return entries
